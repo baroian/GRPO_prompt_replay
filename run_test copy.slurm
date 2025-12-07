@@ -1,0 +1,80 @@
+#!/bin/bash
+
+#SBATCH --job-name=base    # Name of your job
+#SBATCH --output=../outputs/olmo3_final_pres/base_%j.out  # Standard output and error log (%j expands to jobId0
+#SBATCH --partition=gpu_h100           # Partition (queue)
+#SBATCH --gres=gpu:h100:2              # Request N H100 GPU
+#SBATCH --time=04:00:00                # Time limit (HH:MM:SS)
+#SBATCH --nodes=1                      # Number of nodes
+#SBATCH --ntasks-per-node=4            # Number of tasks (processes) per node
+
+echo "Initial working directory: $(pwd)"
+
+module load 2024
+module load CUDA/12.6.0
+
+export CUDA_HOME="$(dirname "$(dirname "$(which nvcc)")")"
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+
+
+cd /home/rberger/rlvr
+
+. open-instruct/node_setup.sh
+
+
+#DATASETS="${DATASETS:-ai2-adapt-dev/rlvr_open_reasoner_math 4000}"
+
+#DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 1500 saurabh5/MATH_3000_Filtered_olmo_completions_new_template_filtered 500"
+
+DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 8000"
+
+
+export DATASETS="${DATASETS}"
+
+### WHATOUT WERE NOT USING NOW THE LOCAL EVAL SAMPLE COUNT
+
+
+export EVALS="${EVALS:-aime:zs_cot_r1::pass_at_32_2024_dapo,aime:zs_cot_r1::pass_at_32_2025_dapo}"
+export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-256}"
+
+# Prompt replay settings
+export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-True}"
+export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.5}"
+export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-20}"
+export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-10}"
+export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.2}"
+export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.7}"
+
+# Prompt pass curriculum settings
+export ENABLE_PROMPT_PASS_CURRICULUM="${ENABLE_PROMPT_PASS_CURRICULUM:-False}"
+export ZERO_PASS_CURRICULUM_FRACTION="${ZERO_PASS_CURRICULUM_FRACTION:-0.25}"
+export PROMPT_PASS_CURRICULUM_05SORT="${PROMPT_PASS_CURRICULUM_05SORT:-True}"
+
+
+seed=123
+export SEED="${seed}"
+
+export NO_RESAMPLING_PASS_RATE="${NO_RESAMPLING_PASS_RATE:-0.9}"
+
+# Length settings
+export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
+export RESPONSE_LEN="${RESPONSE_LEN:-3584}"
+export PACK_LEN="${PACK_LEN:-4096}"
+
+# VLLM num engines
+export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-1}"
+
+
+
+# Experiment name generation
+now=$(date +%s)
+hours=$(date -d @"$now" -u +%H)
+minutes=$(date -d @"$now" -u +%M)
+seconds=$(date -d @"$now" -u +%S)
+
+name="replay_8000_16rollouts_20cooldown"
+
+export EXP_NAME="${EXP_NAME:-${name}_}"
+
+bash /home/rberger/rlvr/open-instruct/scripts/train/olmo3/qwen_math_1_5.sh "$@"
