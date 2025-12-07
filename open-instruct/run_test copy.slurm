@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=base    # Name of your job
-#SBATCH --output=../outputs/olmo3_final_pres/base_%j.out  # Standard output and error log (%j expands to jobId0
+#SBATCH --output=/home/rberger/rlvr/outputs/olmo3_final_pres/base_%j.out  # Standard output and error log (%j expands to jobId0
 #SBATCH --partition=gpu_h100           # Partition (queue)
 #SBATCH --gres=gpu:h100:2              # Request N H100 GPU
 #SBATCH --time=04:00:00                # Time limit (HH:MM:SS)
@@ -20,7 +20,15 @@ export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 
 cd /home/rberger/rlvr
 
-. open-instruct/node_setup.sh
+
+export UV_LINK_MODE=${UV_LINK_MODE:-copy}
+export UV_CACHE_DIR=${UV_CACHE_DIR:-/scratch-shared/rberber/cache/uv}
+export UV_NO_DEV=${UV_NO_DEV:-1}
+export RAY_DASHBOARD_ENABLED=${RAY_DASHBOARD_ENABLED:-0}
+
+
+. GRPO_prompt_replay/open-instruct/node_setup.sh
+
 
 
 #DATASETS="${DATASETS:-ai2-adapt-dev/rlvr_open_reasoner_math 4000}"
@@ -77,4 +85,4 @@ name="replay_8000_16rollouts_20cooldown"
 
 export EXP_NAME="${EXP_NAME:-${name}_}"
 
-bash /home/rberger/rlvr/open-instruct/scripts/train/olmo3/qwen_math_1_5.sh "$@"
+bash /home/rberger/rlvr/GRPO_prompt_replay/open-instruct/scripts/train/olmo3/qwen_math_1_5.sh "$@"

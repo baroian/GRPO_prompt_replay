@@ -63,7 +63,7 @@ export VLLM_ALLOW_INSECURE_SERIALIZATION=1
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 CHECKPOINT_STATE_DIR="${OUTPUT_DIR}/state_${RUN_ID}"
 
-NODE_SETUP="${REPO_ROOT}/node_setup.sh"
+NODE_SETUP="${OPEN_INSTRUCT_ROOT}/node_setup.sh"
 
 seed=${SEED:-1}
 
@@ -142,7 +142,7 @@ uv run python open_instruct/grpo_fast.py \
     --wandb_project_name "olmo3_curriculum" \
     --eval_on_step_0 True \
     --output_dir "${OUTPUT_DIR}" \
-    --prompt_pass_table_dir "/home/rberger/rlvr/open-instruct/UC" \
+    --prompt_pass_table_dir "${OPEN_INSTRUCT_ROOT}/UC" \
     --enable_prompt_replay "${ENABLE_PROMPT_REPLAY}" \
     --prompt_replay_fraction "${PROMPT_REPLAY_FRACTION}" \
     --prompt_replay_cooldown_steps "${PROMPT_REPLAY_COOLDOWN_STEPS}" \

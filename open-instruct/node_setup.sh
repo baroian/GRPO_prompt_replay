@@ -1,9 +1,16 @@
+module purge
+
 module load 2024
 module load CUDA/12.6.0
 
 export CUDA_HOME="$(dirname "$(dirname "$(which nvcc)")")"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+
+export UV_LINK_MODE=${UV_LINK_MODE:-copy}
+export UV_CACHE_DIR=${UV_CACHE_DIR:-/scratch-shared/rberber/cache/uv}
+export UV_NO_DEV=${UV_NO_DEV:-1}
+export RAY_DASHBOARD_ENABLED=${RAY_DASHBOARD_ENABLED:-0}
 
 
 cd /home/rberger/rlvr
@@ -13,7 +20,7 @@ set -a
 source .env
 set +a
 
-cd /home/rberger/rlvr/open-instruct
+cd /home/rberger/rlvr/GRPO_prompt_replay/open-instruct
 
 # Ensure the local editable dependency exists for uv sync.
 if [[ ! -d vllm_olmo2.5 ]]; then
@@ -24,6 +31,8 @@ fi
 pip install uv
 
 uv sync
+
+uv pip install torch
 
 # Environment (adjust as needed for your cluster session)
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
@@ -45,7 +54,7 @@ export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
 # Mirrors program default but set here too
 export NCCL_CUMEM_ENABLE=0
 
-cd /home/rberger/rlvr/open-instruct/scripts/train
+cd /home/rberger/rlvr/GRPO_prompt_replay/open-instruct
 
 export RAY_ADDRESS=local
 

@@ -1740,6 +1740,7 @@ source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
     { name = "antlr4-python3-runtime" },
+    { name = "beaker-py" },
     { name = "bitsandbytes", marker = "sys_platform != 'darwin'" },
     { name = "datasets" },
     { name = "debugpy" },
@@ -1789,6 +1790,7 @@ dev = [
 requires-dist = [
     { name = "accelerate", specifier = ">=1.10.1" },
     { name = "antlr4-python3-runtime", specifier = "==4.11" },
+    { name = "beaker-py", specifier = ">=2.5.0" },
     { name = "bitsandbytes", marker = "sys_platform != 'darwin'", specifier = ">=0.44.1" },
     { name = "datasets", specifier = ">=4.0.0" },
     { name = "debugpy", specifier = ">=1.8.13" },

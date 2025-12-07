@@ -23,8 +23,10 @@ import pandas as pd
 from matplotlib.patches import Polygon, Rectangle
 
 
-RUN_DIR = Path("/home/rberger/rlvr/open-instruct/UC/p_x_tables/")
-DEFAULT_INPUT_PATH = Path("/home/rberger/rlvr/open-instruct/UC/p_x_tables/qwen_px0_filter_0.5_8096prompts_11853/p_x_table_1731.csv")
+SCRIPT_DIR = Path(__file__).resolve().parent
+OPEN_INSTRUCT_ROOT = SCRIPT_DIR.parent
+RUN_DIR = OPEN_INSTRUCT_ROOT / "UC" / "p_x_tables"
+DEFAULT_INPUT_PATH = RUN_DIR / "qwen_px0_filter_0.5_8096prompts_11853" / "p_x_table_1731.csv"
 DEFAULT_OUTPUT_NAME = "p_x_sankey_epochs.png"
 DEFAULT_TABLE_NAME = "p_x_bucket_percentages.txt"
 DEFAULT_HEATMAP_NAME = "p_x_bucket_percentages_heatmap.png"
