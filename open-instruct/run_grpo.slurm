@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=base    # Name of your job
-#SBATCH --output=/home/rberger/rlvr/outputs/olmo3_final_pres/base_%j.out  # Standard output and error log (%j expands to jobId0
+#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/olmo3_final_pres/base_%j.out  # Standard output and error log (%j expands to jobId0
 #SBATCH --partition=gpu_h100           # Partition (queue)
 #SBATCH --gres=gpu:h100:2              # Request N H100 GPU
 #SBATCH --time=04:00:00                # Time limit (HH:MM:SS)
@@ -47,7 +47,7 @@ export EVALS="${EVALS:-aime:zs_cot_r1::pass_at_32_2024_dapo,aime:zs_cot_r1::pass
 export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-256}"
 
 # Prompt replay settings
-export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-True}"
+export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
 export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.5}"
 export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-20}"
 export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-10}"
@@ -81,7 +81,7 @@ hours=$(date -d @"$now" -u +%H)
 minutes=$(date -d @"$now" -u +%M)
 seconds=$(date -d @"$now" -u +%S)
 
-name="replay_8000_16rollouts_20cooldown"
+name="baseline"
 
 export EXP_NAME="${EXP_NAME:-${name}_}"
 
