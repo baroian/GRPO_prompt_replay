@@ -279,9 +279,107 @@ print('After:', converted[0])
 
 ---
 
+## IMPORTANT: Current Limitation & Next Step
+
+### Current Limitation
+
+The current implementation only supports **one transform function for ALL benchmark datasets**. This means you **cannot mix benchmarks with different column formats** in a single run.
+
+For example, this will NOT work:
+```bash
+# BROKEN: These datasets have different column formats!
+BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 272"
+BENCHMARK_TRANSFORM_FN="convert_math500_format rlvr_tokenize_v1 rlvr_max_length_filter_v1"
+# ^ This transform expects 'problem' column, but minervamath has 'question' column
+```
+
+Currently, you can only evaluate one benchmark at a time, or multiple benchmarks that happen to share the same column format.
+
+### Next Step: Auto-Detection of Dataset Format
+
+To properly support multi-benchmark evaluation, the code needs to **auto-detect the format** based on column names and apply the appropriate converter automatically.
+
+**Proposed implementation in `dataset_transformation.py`:**
+
+```python
+def auto_convert_benchmark_format(
+    row: Dict[str, Any],
+    tokenizer: PreTrainedTokenizer,
+    verifier_name: str = "math",
+):
+    """Auto-detect dataset format and convert to RLVR format."""
+    # Detect format based on available columns
+    if "problem" in row:  # MATH-500 style
+        question = row["problem"]
+        answer = row["answer"]
+    elif "question" in row and "final_answer" in row:  # OlympiadBench style
+        question = row["question"]
+        answer = row["final_answer"]
+        if isinstance(answer, list):
+            answer = answer[0] if len(answer) == 1 else answer
+    elif "question" in row:  # minervamath style
+        question = row["question"]
+        answer = row["answer"]
+    else:
+        raise ValueError(f"Unknown dataset format. Columns: {list(row.keys())}")
+    
+    row["messages"] = [{"role": "user", "content": question}]
+    row["ground_truth"] = answer
+    row["dataset"] = verifier_name
+    return row
+```
+
+**Then usage would be simple:**
+```bash
+BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 272 Hothan/OlympiadBench:OE_TO_maths_en_COMP 674"
+BENCHMARK_EVAL_SPLITS="test test train"
+BENCHMARK_TRANSFORM_FN="auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1"
+```
+
+**Status:** ✅ IMPLEMENTED - `auto_convert_benchmark_format` added to `dataset_transformation.py` and registered in `TRANSFORM_FNS`.
+
+**Usage Example:**
+```bash
+# Evaluate on MATH-500 + minervamath in a single run
+BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 272" \
+BENCHMARK_EVAL_SPLITS="test test" \
+BENCHMARK_TRANSFORM_FN="auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1" \
+sbatch run_grpo.slurm
+
+# Evaluate on all three benchmarks
+BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 272 Hothan/OlympiadBench:OE_TO_maths_en_COMP 674" \
+BENCHMARK_EVAL_SPLITS="test test train" \
+BENCHMARK_TRANSFORM_FN="auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1" \
+sbatch run_grpo.slurm
+```
+
+---
+
 ## Notes
 
 1. **OlympiadBench only has `train` split** - you must use `split='train'` not `split='test'`
 2. **OlympiadBench requires config name** - e.g., `'OE_TO_maths_en_COMP'` for text-only English math
 3. **`final_answer` is a list** in OlympiadBench - need to handle appropriately
 4. The `MathVerifier` should work for all these math datasets as it tries multiple extraction methods (boxed, Minerva format, LaTeX)
+
+---
+
+## Failure Modes Encountered
+
+### 1. `transform_fn` / `transform_fn_args` Length Mismatch
+
+**Error:** `AssertionError: transform_fn and transform_fn_args must have the same length`
+
+**Cause:** When using 3 benchmark transform functions (e.g., `convert_math500_format`, `rlvr_tokenize_v1`, `rlvr_max_length_filter_v1`), the code was passing only 2 args entries (built for the default 2 training transforms).
+
+**Fix:** Build `benchmark_transform_fn_args` dynamically based on which functions are in `benchmark_transform_fn`:
+```python
+benchmark_transform_fn_args = []
+for fn_name in benchmark_transform_fn:
+    if fn_name == "rlvr_tokenize_v1":
+        benchmark_transform_fn_args.append({"system_prompt_override": ...})
+    elif fn_name == "rlvr_max_length_filter_v1":
+        benchmark_transform_fn_args.append({"max_prompt_token_length": ...})
+    else:
+        benchmark_transform_fn_args.append({})  # Converter functions need no args
+```

@@ -3,8 +3,8 @@
 #SBATCH --job-name=base    # Name of your job
 #SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/olmo3_final_pres/base_%j.out  # Standard output and error log (%j expands to jobId0
 #SBATCH --partition=gpu_h100           # Partition (queue)
-#SBATCH --gres=gpu:h100:2              # Request N H100 GPU
-#SBATCH --time=04:00:00                # Time limit (HH:MM:SS)
+#SBATCH --gres=gpu:h100:4              # Request N H100 GPU
+#SBATCH --time=03:00:00                # Time limit (HH:MM:SS)
 #SBATCH --nodes=1                      # Number of nodes
 #SBATCH --ntasks-per-node=4            # Number of tasks (processes) per node
 
@@ -44,7 +44,7 @@ export DATASETS="${DATASETS}"
 
 
 export EVALS="${EVALS:-aime:zs_cot_r1::pass_at_32_2024_dapo,aime:zs_cot_r1::pass_at_32_2025_dapo}"
-export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-256}"
+export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-128}" # FOR TESTING USE ONLY 16
 
 # Prompt replay settings
 export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"

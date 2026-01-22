@@ -167,6 +167,12 @@ class Args:
     """Run benchmark evaluation after this many training steps. Set to -1 to use local_eval_every. Set to 0 to disable."""
     dataset_config_benchmark_hash: str | None = None
     """The hash of the dataset configuration for benchmark evaluation."""
+    dataset_transform_fn_benchmark: list[str] | None = None
+    """Transform functions for benchmark datasets. If None, uses dataset_transform_fn.
+    Useful when benchmark datasets have different column formats than training data.
+    Common values: ["convert_math500_format", "rlvr_tokenize_v1", "rlvr_max_length_filter_v1"]
+    for MATH-500 style datasets, or ["convert_minervamath_format", "rlvr_tokenize_v1", "rlvr_max_length_filter_v1"]
+    for minervamath style datasets."""
     dataset_transform_fn: list[str] = field(default_factory=lambda: ["rlvr_tokenize_v1", "rlvr_max_length_filter_v1"])
     """The list of transform functions to apply to the dataset."""
     dataset_cache_mode: Literal["hf", "local"] = "local"
@@ -1819,7 +1825,10 @@ class PolicyTrainerRayProcess(RayProcess):
                             ).float()
                         # Calculate absolute mean advantage statistics
                         advantage_stats[i] = masked_mean(
-                            mb_advantages[:, 1:].abs(), mb_response_masks_bool, args.masked_mean_axis, args.masked_mean_denominator
+                            mb_advantages[:, 1:].abs(),
+                            mb_response_masks_bool,
+                            args.masked_mean_axis,
+                            args.masked_mean_denominator,
                         )
 
             with torch.no_grad():
@@ -2212,7 +2221,14 @@ class PendingQueriesMap:
         self._lock = threading.Lock()
 
     def insert(
-        self, dataset_idx, query, ground_truth, dataset, raw_query, metadata: PromptReplayMetadata | None = None
+        self,
+        dataset_idx,
+        query,
+        ground_truth,
+        dataset,
+        raw_query,
+        dataset_source=None,
+        metadata: PromptReplayMetadata | None = None,
     ):
         """Insert or increment count for a dataset index."""
         with self._lock:
@@ -2226,6 +2242,7 @@ class PendingQueriesMap:
                     "ground_truth": ground_truth,
                     "dataset": dataset,
                     "raw_query": raw_query,
+                    "dataset_source": dataset_source,
                     "count": 1,
                     "metadata": deque([metadata or PromptReplayMetadata.empty()]),
                 }
@@ -2241,6 +2258,7 @@ class PendingQueriesMap:
             ground_truth = entry["ground_truth"]
             dataset = entry["dataset"]
             raw_query = entry["raw_query"]
+            dataset_source = entry.get("dataset_source")
             count = entry["count"]
             metadata_queue: deque[PromptReplayMetadata] = entry["metadata"]
             metadata = metadata_queue.popleft() if metadata_queue else PromptReplayMetadata.empty()
@@ -2250,7 +2268,7 @@ class PendingQueriesMap:
             else:
                 del self._map[dataset_idx]
 
-            return query, ground_truth, dataset, raw_query, metadata
+            return query, ground_truth, dataset, raw_query, dataset_source, metadata
 
     def __len__(self):
         """Return the number of entries in the map."""
@@ -2332,6 +2350,7 @@ def accumulate_inference_batches(
     all_queries = []
     all_ground_truths = []
     all_datasets = []
+    all_dataset_sources = []
     all_raw_queries = []
     all_decoded_responses = []
     all_reward_metrics = []
@@ -2368,7 +2387,9 @@ def accumulate_inference_batches(
             f"Dataset index: {result.dataset_index}, Epoch: {result.epoch_number}"
         )
 
-        query, ground_truth, dataset_name, raw_query, replay_metadata = pending_queries_map.pop(result.dataset_index)
+        query, ground_truth, dataset_name, raw_query, dataset_source, replay_metadata = pending_queries_map.pop(
+            result.dataset_index
+        )
 
         # Replenish generation queue with new prompt
         if replenish_prompts:
@@ -2399,6 +2420,7 @@ def accumulate_inference_batches(
         k_queries = repeat_each([query], generation_config.n)
         k_ground_truths = repeat_each([ground_truth], generation_config.n)
         k_datasets = repeat_each([dataset_name], generation_config.n)
+        k_dataset_sources = repeat_each([dataset_source], generation_config.n)
         k_raw_queries = repeat_each([raw_query], generation_config.n)
 
         scores, reward_metrics = asyncio.run(
@@ -2463,6 +2485,7 @@ def accumulate_inference_batches(
         all_queries.extend(k_queries)
         all_ground_truths.extend(k_ground_truths)
         all_datasets.extend(k_datasets)
+        all_dataset_sources.extend(k_dataset_sources)
         all_raw_queries.extend(k_raw_queries)
         all_decoded_responses.extend(decoded_responses)
         all_scores.extend(scores)
@@ -2558,6 +2581,7 @@ def accumulate_inference_batches(
         decoded_responses=all_decoded_responses,
         indices=None,  # Not meaningful for combined results
         scores=all_scores,
+        dataset_sources=all_dataset_sources if all_dataset_sources else None,
     )
 
     combined_reward_metrics = combine_reward_metrics(all_reward_metrics)
@@ -2937,7 +2961,8 @@ def maybe_configure_local_eval_subset(args: Args):
         )
 
     args.dataset_mixer_eval_list = eval_list
-    args.dataset_mixer_eval_list_splits = ["train"] * len(eval_list)
+    # eval_list contains (name, count) pairs, so num_datasets = len // 2
+    args.dataset_mixer_eval_list_splits = ["train"] * (len(eval_list) // 2)
 
     logger.info(
         "Configured local eval subset using %d prompts across %d training datasets",
@@ -2995,22 +3020,58 @@ def setup_datasets(args: Args, tc: TokenizerConfig, tokenizer: PreTrainedTokeniz
     benchmark_dataset = None
     if len(args.dataset_mixer_benchmark_list) > 0:
         logger.info(f"Loading benchmark dataset: {args.dataset_mixer_benchmark_list}")
+        # Use benchmark-specific transform functions if provided, otherwise fall back to training transforms
+        benchmark_transform_fn = (
+            args.dataset_transform_fn_benchmark
+            if args.dataset_transform_fn_benchmark is not None
+            else args.dataset_transform_fn
+        )
+        logger.info(f"Using benchmark transform functions: {benchmark_transform_fn}")
+
+        # Build transform_fn_args matching the benchmark transform functions
+        # Each transform function needs a corresponding args dict
+        benchmark_transform_fn_args = []
+        for fn_name in benchmark_transform_fn:
+            if fn_name == "rlvr_tokenize_v1":
+                benchmark_transform_fn_args.append({"system_prompt_override": system_prompt_override})
+            elif fn_name == "rlvr_max_length_filter_v1":
+                benchmark_transform_fn_args.append({"max_prompt_token_length": args.max_prompt_token_length})
+            else:
+                # Converter functions and others don't need special args
+                benchmark_transform_fn_args.append({})
+
+        # Only keep the columns needed for benchmark evaluation
+        # This ensures datasets with different schemas can be concatenated
+        benchmark_target_columns = [
+            "input_ids_prompt",  # INPUT_IDS_PROMPT_KEY
+            "prompt",  # RAW_PROMPT_KEY
+            "ground_truth",  # GROUND_TRUTHS_KEY
+            "dataset",  # VERIFIER_SOURCE_KEY
+            "dataset_source",  # DATASET_ORIGIN_KEY (added automatically if present)
+        ]
         benchmark_dataset = get_cached_dataset_tulu(
             dataset_mixer_list=args.dataset_mixer_benchmark_list,
             dataset_mixer_list_splits=args.dataset_mixer_benchmark_list_splits,
             tc=tc,
-            dataset_transform_fn=args.dataset_transform_fn,
-            transform_fn_args=transform_fn_args,
+            dataset_transform_fn=benchmark_transform_fn,
+            transform_fn_args=benchmark_transform_fn_args,
+            target_columns=benchmark_target_columns,
             hf_entity=args.hf_entity,
             dataset_cache_mode=args.dataset_cache_mode,
             dataset_config_hash=args.dataset_config_benchmark_hash,
             dataset_local_cache_dir=args.dataset_local_cache_dir,
             dataset_skip_cache=args.dataset_skip_cache,
             system_prompt_override=system_prompt_override,
+            drop_dataset_source=False,  # Keep dataset_source for per-benchmark metrics
         )
         if args.shuffle_eval_dataset:
             benchmark_dataset = benchmark_dataset.shuffle(seed=args.seed)
         logger.info(f"Benchmark dataset loaded with {len(benchmark_dataset)} examples")
+        logger.info(f"Benchmark dataset columns: {benchmark_dataset.column_names}")
+        if "dataset_source" in benchmark_dataset.column_names:
+            # Log unique dataset sources for per-benchmark metrics
+            unique_sources = set(benchmark_dataset["dataset_source"])
+            logger.info(f"Benchmark dataset sources: {unique_sources}")
 
     visualize_token(train_dataset[0][INPUT_IDS_PROMPT_KEY], tokenizer)
 
@@ -3172,7 +3233,10 @@ def add_prompt_to_generator(
     ground_truth = example[GROUND_TRUTHS_KEY]
     dataset_name = example[VERIFIER_SOURCE_KEY]
     raw_query = example[RAW_PROMPT_KEY]
-    pending_queries_map.insert(example_index, query, ground_truth, dataset_name, raw_query, prompt_metadata)
+    dataset_source = example.get("dataset_source")  # Track which dataset this example came from
+    pending_queries_map.insert(
+        example_index, query, ground_truth, dataset_name, raw_query, dataset_source, prompt_metadata
+    )
 
     param_prompt_Q.put(
         PromptRequest(
@@ -3567,6 +3631,8 @@ def maybe_evaluate_benchmark(
             int(finish_reason == "stop") for finish_reason in benchmark_result.finish_reasons
         ) / len(benchmark_result.finish_reasons)
         benchmark_reward_metrics = {f"benchmark/{key}": val for key, val in benchmark_reward_metrics.items()}
+
+        # Compute overall (averaged) benchmark metrics
         benchmark_metrics = {
             "benchmark/scores": np.array(benchmark_batch.scores).mean(),
             "benchmark/sequence_lengths": benchmark_sequence_lengths.mean(),
@@ -3585,6 +3651,42 @@ def maybe_evaluate_benchmark(
             total_tokens / benchmark_result.token_statistics.generation_time
         )
 
+        # Compute per-benchmark metrics if dataset_sources is available
+        if benchmark_batch.dataset_sources:
+            # Map full dataset names to short display names
+            SHORT_BENCHMARK_NAMES = {
+                "HuggingFaceH4/MATH-500": "MATH500",
+                "math-ai/minervamath": "MinervaMAth",
+                "Hothan/OlympiadBench": "OlympiadBench",
+            }
+
+            # Group results by dataset source
+            source_to_indices = defaultdict(list)
+            for idx, source in enumerate(benchmark_batch.dataset_sources):
+                if source:  # Only include if source is not None
+                    # Use short name if available, otherwise clean up the full name
+                    # Strip config suffix (e.g., "Hothan/OlympiadBench:OE_TO_maths_en_COMP" -> "Hothan/OlympiadBench")
+                    base_source = source.split(":")[0]
+                    short_name = SHORT_BENCHMARK_NAMES.get(
+                        base_source, source.replace("/", "_").replace(":", "_").replace("-", "_")
+                    )
+                    source_to_indices[short_name].append(idx)
+
+            # Compute metrics for each benchmark dataset
+            for source_name, indices in source_to_indices.items():
+                source_scores = [benchmark_batch.scores[i] for i in indices]
+                source_seq_lens = [benchmark_sequence_lengths[i] for i in indices]
+                source_stop_count = sum(1 for i in indices if benchmark_result.finish_reasons[i] == "stop")
+
+                # Add per-benchmark metrics
+                benchmark_metrics[f"benchmark/{source_name}/scores"] = np.mean(source_scores)
+                benchmark_metrics[f"benchmark/{source_name}/correct_rate"] = (
+                    np.mean(source_scores) / args.max_possible_score
+                )
+                benchmark_metrics[f"benchmark/{source_name}/sequence_lengths"] = np.mean(source_seq_lens)
+                benchmark_metrics[f"benchmark/{source_name}/stop_rate"] = source_stop_count / len(indices)
+                benchmark_metrics[f"benchmark/{source_name}/count"] = len(indices)
+
         print_rich_single_line_metrics(benchmark_metrics)
 
         table = {}
@@ -3593,6 +3695,26 @@ def maybe_evaluate_benchmark(
         table["response"] = [item.replace(tokenizer.pad_token, "") for item in table["response"]]
         table["scores"] = benchmark_batch.scores
         table["ground_truth"] = benchmark_batch.ground_truths if benchmark_batch else []
+        if benchmark_batch.dataset_sources:
+            table["dataset_source"] = benchmark_batch.dataset_sources
+
+        # Debug: Log sample ground_truths for each benchmark to diagnose 0-score issues
+        if benchmark_batch.dataset_sources:
+            samples_by_source = defaultdict(list)
+            for i, src in enumerate(benchmark_batch.dataset_sources):
+                if src and len(samples_by_source[src]) < 2:  # Max 2 samples per benchmark
+                    gt = benchmark_batch.ground_truths[i] if benchmark_batch.ground_truths else None
+                    samples_by_source[src].append(
+                        {
+                            "ground_truth": gt,
+                            "ground_truth_type": type(gt).__name__,
+                            "score": benchmark_batch.scores[i] if benchmark_batch.scores else None,
+                            "response_snippet": table["response"][i][:300] if table["response"] else None,
+                        }
+                    )
+            for src, samples in samples_by_source.items():
+                logger.info(f"[DEBUG] Benchmark '{src}' samples: {samples}")
+
         df = pd.DataFrame(table)
 
         if args.with_tracking:
@@ -4201,7 +4323,15 @@ def main(args: Args, tc: TokenizerConfig, model_config: ModelConfig):
     pprint([args, model_config])
 
     # Initialize Ray before creating Ray objects
-    ray.init(dashboard_host="0.0.0.0", runtime_env={"excludes": [".git/"], "env_vars": dict(os.environ)})
+    # Exclude package manager files to prevent Ray from creating a new venv with different versions
+    # This ensures workers use the same packages as the main process
+    ray.init(
+        dashboard_host="0.0.0.0",
+        runtime_env={
+            "excludes": [".git/", "pyproject.toml", "uv.lock", "*.toml", "requirements*.txt"],
+            "env_vars": dict(os.environ),
+        },
+    )
 
     # Create Ray queues.
     # Since we now send/receive individual prompts, queue size should accommodate

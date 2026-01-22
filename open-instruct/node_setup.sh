@@ -12,6 +12,11 @@ export UV_CACHE_DIR=${UV_CACHE_DIR:-/scratch-shared/rberber/cache/uv}
 export UV_NO_DEV=${UV_NO_DEV:-1}
 export RAY_DASHBOARD_ENABLED=${RAY_DASHBOARD_ENABLED:-0}
 
+# Tell uv to use the existing venv instead of creating a new one in Ray workers
+# This prevents version mismatches when Ray packages the project
+# Use realpath to handle symlinks (e.g., /home/rberger -> /gpfs/home6/rberger)
+export UV_PROJECT_ENVIRONMENT="$(realpath /home/rberger/rlvr/GRPO_prompt_replay/open-instruct/.venv)"
+
 
 cd /home/rberger/rlvr
 

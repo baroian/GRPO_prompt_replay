@@ -1426,6 +1426,197 @@ def rlvr_max_length_filter_v2(
     return len(row[INPUT_IDS_PROMPT_KEY]) <= max_prompt_token_length
 
 
+# ----------------------------------------------------------------------------
+# Benchmark Dataset Format Converters
+# These functions convert various benchmark dataset formats to the standard RLVR format
+# Expected output format: {"messages": [...], "ground_truth": ..., "dataset": ...}
+
+
+def convert_math500_format(
+    row: Dict[str, Any],
+    tokenizer: PreTrainedTokenizer,
+    problem_key: str = "problem",
+    answer_key: str = "answer",
+    verifier_name: str = "math",
+):
+    """Convert MATH-500 style datasets to the expected RLVR format.
+
+    MATH-500 format: {"problem": "...", "answer": "...", "solution": "...", ...}
+    Output format: {"messages": [{"role": "user", "content": "..."}], "ground_truth": "...", "dataset": "math"}
+
+    Args:
+        row: Dataset row with problem_key and answer_key columns
+        tokenizer: Tokenizer (unused but required for interface consistency)
+        problem_key: Column name for the problem/question text (default: "problem")
+        answer_key: Column name for the answer (default: "answer")
+        verifier_name: Verifier type to use for reward computation (default: "math")
+    """
+    row[DEFAULT_SFT_MESSAGES_KEY] = [{"role": "user", "content": row[problem_key]}]
+    row[GROUND_TRUTHS_KEY] = row[answer_key]
+    row[VERIFIER_SOURCE_KEY] = verifier_name
+    return row
+
+
+def convert_minervamath_format(
+    row: Dict[str, Any],
+    tokenizer: PreTrainedTokenizer,
+    question_key: str = "question",
+    answer_key: str = "answer",
+    verifier_name: str = "math",
+):
+    """Convert minervamath style datasets to the expected RLVR format.
+
+    minervamath format: {"question": "...", "answer": "..."}
+    Output format: {"messages": [{"role": "user", "content": "..."}], "ground_truth": "...", "dataset": "math"}
+
+    Args:
+        row: Dataset row with question_key and answer_key columns
+        tokenizer: Tokenizer (unused but required for interface consistency)
+        question_key: Column name for the question text (default: "question")
+        answer_key: Column name for the answer (default: "answer")
+        verifier_name: Verifier type to use for reward computation (default: "math")
+    """
+    row[DEFAULT_SFT_MESSAGES_KEY] = [{"role": "user", "content": row[question_key]}]
+    row[GROUND_TRUTHS_KEY] = row[answer_key]
+    row[VERIFIER_SOURCE_KEY] = verifier_name
+    return row
+
+
+def convert_olympiadbench_format(
+    row: Dict[str, Any],
+    tokenizer: PreTrainedTokenizer,
+    question_key: str = "question",
+    answer_key: str = "final_answer",
+    verifier_name: str = "math",
+):
+    """Convert OlympiadBench style datasets to the expected RLVR format.
+
+    OlympiadBench format: {"question": "...", "final_answer": ["..."], ...}
+    Note: final_answer is a LIST in OlympiadBench, we take the first element if single answer
+    Note: OlympiadBench only has 'train' split, not 'test'
+
+    Output format: {"messages": [{"role": "user", "content": "..."}], "ground_truth": "...", "dataset": "math"}
+
+    Args:
+        row: Dataset row with question_key and answer_key columns
+        tokenizer: Tokenizer (unused but required for interface consistency)
+        question_key: Column name for the question text (default: "question")
+        answer_key: Column name for the answer list (default: "final_answer")
+        verifier_name: Verifier type to use for reward computation (default: "math")
+    """
+    row[DEFAULT_SFT_MESSAGES_KEY] = [{"role": "user", "content": row[question_key]}]
+
+    # Handle final_answer which is a list in OlympiadBench
+    answer = row[answer_key]
+    if isinstance(answer, list):
+        # If single answer, extract it; otherwise keep as list for multi-answer problems
+        answer = answer[0] if len(answer) == 1 else answer
+    row[GROUND_TRUTHS_KEY] = answer
+    row[VERIFIER_SOURCE_KEY] = verifier_name
+    return row
+
+
+def convert_generic_benchmark_format(
+    row: Dict[str, Any],
+    tokenizer: PreTrainedTokenizer,
+    question_key: str = "question",
+    answer_key: str = "answer",
+    verifier_name: str = "math",
+):
+    """Generic converter for benchmark datasets with configurable column names.
+
+    This is a flexible converter that can handle most benchmark formats by specifying
+    the appropriate column names via transform_fn_args.
+
+    Args:
+        row: Dataset row
+        tokenizer: Tokenizer (unused but required for interface consistency)
+        question_key: Column name for the question/problem text
+        answer_key: Column name for the answer/ground_truth
+        verifier_name: Verifier type to use for reward computation
+    """
+    row[DEFAULT_SFT_MESSAGES_KEY] = [{"role": "user", "content": row[question_key]}]
+
+    answer = row[answer_key]
+    # Handle list answers (like OlympiadBench)
+    if isinstance(answer, list):
+        answer = answer[0] if len(answer) == 1 else answer
+    row[GROUND_TRUTHS_KEY] = answer
+    row[VERIFIER_SOURCE_KEY] = verifier_name
+    return row
+
+
+def auto_convert_benchmark_format(row: Dict[str, Any], tokenizer: PreTrainedTokenizer, verifier_name: str = "math"):
+    """Auto-detect dataset format and convert to RLVR format.
+
+    This function auto-detects the dataset format based on available column names
+    and applies the appropriate conversion. This enables evaluating multiple benchmarks
+    with different column formats in a single run.
+
+    Detection priority:
+    1. "problem" column → MATH-500 style (problem/answer)
+    2. "question" + "final_answer" columns → OlympiadBench style (question/final_answer)
+    3. "question" column → minervamath style (question/answer)
+
+    Supported formats:
+    - MATH-500: {"problem": "...", "answer": "..."}
+    - minervamath: {"question": "...", "answer": "..."}
+    - OlympiadBench: {"question": "...", "final_answer": ["..."]}
+    - AIME datasets: {"problem": "...", "answer": "..."}
+    - AMC datasets: {"problem": "...", "answer": "..."}
+
+    Args:
+        row: Dataset row with problem/question and answer columns
+        tokenizer: Tokenizer (unused but required for interface consistency)
+        verifier_name: Verifier type to use for reward computation (default: "math")
+
+    Returns:
+        Row with messages, ground_truth, and dataset fields set
+
+    Raises:
+        ValueError: If the dataset format cannot be detected
+    """
+    # Detect format based on available columns
+    if "problem" in row:
+        # MATH-500 style, AIME, AMC, etc.
+        question = row["problem"]
+        answer = row.get("answer", row.get("solution", ""))
+    elif "question" in row and "final_answer" in row:
+        # OlympiadBench style
+        question = row["question"]
+        answer = row["final_answer"]
+    elif "question" in row:
+        # minervamath style and similar
+        question = row["question"]
+        answer = row.get("answer", row.get("solution", ""))
+    else:
+        raise ValueError(
+            f"Unknown dataset format. Cannot auto-detect columns. "
+            f"Available columns: {list(row.keys())}. "
+            f"Expected one of: 'problem', 'question' with 'answer'/'final_answer'/'solution'"
+        )
+
+    # Handle list answers (like OlympiadBench's final_answer)
+    # Convert to string to ensure consistent schema across datasets
+    if isinstance(answer, list):
+        if len(answer) == 1:
+            answer = answer[0]
+        else:
+            # Join multiple answers with separator - verifier can handle this
+            answer = "; ".join(str(a) for a in answer)
+
+    # Ensure answer is a string (not None or other types)
+    if answer is None:
+        answer = ""
+    elif not isinstance(answer, str):
+        answer = str(answer)
+
+    row[DEFAULT_SFT_MESSAGES_KEY] = [{"role": "user", "content": question}]
+    row[GROUND_TRUTHS_KEY] = answer
+    row[VERIFIER_SOURCE_KEY] = verifier_name
+    return row
+
+
 TRANSFORM_FNS = {
     "sft_tokenize_v1": (sft_tokenize_v1, "map"),
     "sft_tokenize_mask_out_prompt_v1": (sft_tokenize_mask_out_prompt_v1, "map"),
@@ -1438,6 +1629,12 @@ TRANSFORM_FNS = {
     "preference_tulu_filter_v1": (preference_tulu_filter_v1, "filter"),
     "rlvr_tokenize_v1": (rlvr_tokenize_v3, "map"),
     "rlvr_max_length_filter_v1": (rlvr_max_length_filter_v2, "filter"),
+    # Benchmark dataset format converters
+    "convert_math500_format": (convert_math500_format, "map"),
+    "convert_minervamath_format": (convert_minervamath_format, "map"),
+    "convert_olympiadbench_format": (convert_olympiadbench_format, "map"),
+    "convert_generic_benchmark_format": (convert_generic_benchmark_format, "map"),
+    "auto_convert_benchmark_format": (auto_convert_benchmark_format, "map"),
 }
 
 
@@ -1501,6 +1698,14 @@ class DatasetConfig:
     is_upsampled: bool = False
 
     def __post_init__(self):
+        # Parse dataset name and optional config (format: "repo_name" or "repo_name:config_name")
+        # e.g., "Hothan/OlympiadBench:OE_TO_maths_en_COMP" -> repo="Hothan/OlympiadBench", config="OE_TO_maths_en_COMP"
+        if ":" in self.dataset_name and not os.path.exists(self.dataset_name):
+            repo_name, config_name = self.dataset_name.split(":", 1)
+        else:
+            repo_name = self.dataset_name
+            config_name = None
+
         # if the file exists locally, use the local file
         if os.path.exists(self.dataset_name) and self.dataset_name.endswith(".jsonl"):
             assert self.dataset_split == "train", "Only train split is supported for local jsonl files."
@@ -1513,12 +1718,12 @@ class DatasetConfig:
                 "parquet", data_files=self.dataset_name, split=self.dataset_split, num_proc=max_num_processes()
             )
         else:
-            # commit hash only works for hf datasets
-            self.dataset_commit_hash = get_commit_hash(
-                self.dataset_name, self.dataset_revision, "README.md", "dataset"
-            )
+            # commit hash only works for hf datasets - use repo_name without config
+            self.dataset_commit_hash = get_commit_hash(repo_name, self.dataset_revision, "README.md", "dataset")
+            # load_dataset accepts config name via the 'name' parameter
             self.dataset = load_dataset(
-                self.dataset_name,
+                repo_name,
+                name=config_name,  # None if no config specified
                 split=self.dataset_split,
                 revision=self.dataset_revision,
                 num_proc=max_num_processes(),
@@ -1836,15 +2041,19 @@ def load_dataset_configs(
     dataset_config_seed: int = 42,
 ) -> List[DatasetConfig]:
     dcs = []
+    assert len(dataset_mixer_list) % 2 == 0, f"Data mixer list length is not even: {dataset_mixer_list}"
+    num_datasets = len(dataset_mixer_list) // 2  # List contains (name, count) pairs
+
     if len(dataset_mixer_list_splits) == 1:
         print("by default, we will use the same split for all datasets")
-        dataset_mixer_list_splits = [dataset_mixer_list_splits[0]] * len(dataset_mixer_list)
+        dataset_mixer_list_splits = [dataset_mixer_list_splits[0]] * num_datasets
     else:
-        if len(dataset_mixer_list_splits) != len(dataset_mixer_list):
+        if len(dataset_mixer_list_splits) != num_datasets:
             raise ValueError(
-                f"dataset_mixer_list_splits length must be the same as dataset_mixer_list: {len(dataset_mixer_list_splits)=} != {len(dataset_mixer_list)=}"
+                f"dataset_mixer_list_splits length must match number of datasets: "
+                f"{len(dataset_mixer_list_splits)=} != {num_datasets=} (from {len(dataset_mixer_list)} list items)"
             )
-    assert len(dataset_mixer_list) % 2 == 0, f"Data mixer list length is not even: {dataset_mixer_list}"
+
     for i in range(0, len(dataset_mixer_list), 2):
         dataset_name = dataset_mixer_list[i]
         frac_or_num_samples = dataset_mixer_list[i + 1]
@@ -1852,16 +2061,11 @@ def load_dataset_configs(
             frac_or_num_samples = float(frac_or_num_samples)
         else:
             frac_or_num_samples = int(frac_or_num_samples)
-        # Uses dataset_mixer_list_splits[i] where i increments by 2 (0, 2, 4...). This works because
-        # all current usage provides a single split that gets replicated to len(dataset_mixer_list).
-        # If different splits per dataset are needed, use dataset_mixer_list_splits[i // 2] instead.
-        assert i % 2 == 0, f"Index {i} must be even"
-        assert i < len(dataset_mixer_list_splits), (
-            f"Index {i} out of bounds for dataset_mixer_list_splits of length {len(dataset_mixer_list_splits)}"
-        )
+        # Use i // 2 to get the correct split for each dataset (i goes 0, 2, 4... for datasets 0, 1, 2...)
+        dataset_idx = i // 2
         dataset_config = DatasetConfig(
             dataset_name=dataset_name,
-            dataset_split=dataset_mixer_list_splits[i],
+            dataset_split=dataset_mixer_list_splits[dataset_idx],
             dataset_revision="main",
             transform_fn=dataset_transform_fn,
             transform_fn_args=transform_fn_args,
@@ -1941,6 +2145,7 @@ def get_cached_dataset_tulu(
     dataset_skip_cache: bool = False,
     dataset_config_seed: int = 42,
     system_prompt_override: Optional[str] = None,
+    drop_dataset_source: bool = True,
 ) -> Dataset:
     return get_cached_dataset_tulu_with_statistics(
         dataset_mixer_list=dataset_mixer_list,
@@ -1954,7 +2159,7 @@ def get_cached_dataset_tulu(
         hf_entity=hf_entity,
         dataset_local_cache_dir=dataset_local_cache_dir,
         dataset_skip_cache=dataset_skip_cache,
-        drop_dataset_source=True,
+        drop_dataset_source=drop_dataset_source,
         dataset_config_seed=dataset_config_seed,
         system_prompt_override=system_prompt_override,
     )[0]

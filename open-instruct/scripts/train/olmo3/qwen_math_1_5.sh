@@ -31,9 +31,35 @@ LOCAL_EVAL_TIMEOUT="${LOCAL_EVAL_TIMEOUT:-300}"
 
 # Benchmark evaluation: separate full benchmark (e.g., MATH-500)
 # This logs to wandb under "benchmark/" prefix, separate from "eval/"
-BENCHMARK_EVALS="${BENCHMARK_EVALS:-HuggingFaceH4/MATH-500 128}"
-BENCHMARK_EVAL_SPLITS="${BENCHMARK_EVAL_SPLITS:-test}"
+# 
+# MULTI-BENCHMARK EVALUATION:
+# Use auto_convert_benchmark_format to evaluate on multiple benchmarks with different column formats!
+# Format: "dataset_name num_samples dataset_name num_samples ..."
+# Splits: "split split ..." (one per dataset)
+#
+# Supported benchmarks (auto-detected by auto_convert_benchmark_format):
+#   - HuggingFaceH4/MATH-500: problem/answer columns, split=test
+#   - math-ai/minervamath: question/answer columns, split=test, 272 total examples
+#   - Hothan/OlympiadBench:OE_TO_maths_en_COMP: question/final_answer columns, split=train (no test!), 674 examples
+#   - AI-MO/aimo-validation-aime: problem/answer columns, split=train
+#   - AI-MO/aimo-validation-amc: problem/answer columns, split=train
+#
+# Example multi-benchmark config:
+#   BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 272"
+#   BENCHMARK_EVAL_SPLITS="test test"
+#   BENCHMARK_TRANSFORM_FN="auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1"
+#
+
+
+BENCHMARK_EVALS="${BENCHMARK_EVALS:-HuggingFaceH4/MATH-500 100 math-ai/minervamath 100 Hothan/OlympiadBench:OE_TO_maths_en_COMP 100}"
+BENCHMARK_EVAL_SPLITS="${BENCHMARK_EVAL_SPLITS:-test test train}"
+#BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 272 Hothan/OlympiadBench:OE_TO_maths_en_COMP 674" \
+#BENCHMARK_EVAL_SPLITS="test test train" \
 BENCHMARK_EVAL_EVERY="${BENCHMARK_EVAL_EVERY:-}"  # Empty means use local_eval_every
+# Transform functions for benchmark datasets (converts non-standard formats to RLVR format)
+# RECOMMENDED: Use auto_convert_benchmark_format for multi-benchmark evaluation
+# This auto-detects column formats (problem/question, answer/final_answer) and handles them correctly
+BENCHMARK_TRANSFORM_FN="${BENCHMARK_TRANSFORM_FN:-auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1}"
 
 
 # Prompt replay settings
@@ -77,6 +103,7 @@ echo "[info] Output dir: ${OUTPUT_DIR}"
 echo "[info] Local eval subset sample count: ${LOCAL_EVAL_SAMPLE_COUNT}"
 echo "[info] Benchmark dataset: ${BENCHMARK_EVALS}"
 echo "[info] Benchmark splits: ${BENCHMARK_EVAL_SPLITS}"
+echo "[info] Benchmark transform: ${BENCHMARK_TRANSFORM_FN}"
 
 # Experiment name (set via SLURM or generate here for direct execution)
 if [[ -z "${EXP_NAME:-}" ]]; then
@@ -113,6 +140,7 @@ uv run python open_instruct/grpo_fast.py \
     --local_eval_timeout "${LOCAL_EVAL_TIMEOUT}" \
     --dataset_mixer_benchmark_list $BENCHMARK_EVALS \
     --dataset_mixer_benchmark_list_splits $BENCHMARK_EVAL_SPLITS \
+    --dataset_transform_fn_benchmark $BENCHMARK_TRANSFORM_FN \
     ${BENCHMARK_EVAL_EVERY:+--benchmark_eval_every "${BENCHMARK_EVAL_EVERY}"} \
     --max_prompt_token_length "${MAX_PROMPT_LEN}" \
     --response_length "${RESPONSE_LEN}" \
@@ -123,8 +151,8 @@ uv run python open_instruct/grpo_fast.py \
     --temperature 1.0 \
     --total_episodes 512000 \
     --deepspeed_stage 2 \
-    --num_learners_per_node 1 \
-    --vllm_num_engines "${VLLM_NUM_ENGINES}" \
+    --num_learners_per_node 2 \
+    --vllm_num_engines 2\
     --vllm_tensor_parallel_size 1 \
     --lr_scheduler_type constant \
     --apply_verifiable_reward true \

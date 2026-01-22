@@ -53,6 +53,7 @@ class Batch:
     decoded_responses: list[str] | None
     indices: list[int] | None
     scores: list[float] | None
+    dataset_sources: list[str] | None = None  # Track which benchmark dataset each example came from
 
     def __getitem__(self, key: slice | int | list[int]) -> "Batch":
         """Enable indexing and slicing: batch[5], batch[start:end], or batch[[1,3,5]]."""
@@ -66,6 +67,7 @@ class Batch:
                 decoded_responses=self.decoded_responses[key] if self.decoded_responses is not None else None,
                 indices=self.indices[key] if self.indices is not None else None,
                 scores=self.scores[key] if self.scores is not None else None,
+                dataset_sources=self.dataset_sources[key] if self.dataset_sources is not None else None,
             )
         elif isinstance(key, int):
             # Handle single index: batch[5]
@@ -77,6 +79,7 @@ class Batch:
                 decoded_responses=[self.decoded_responses[key]] if self.decoded_responses is not None else None,
                 indices=[self.indices[key]] if self.indices is not None else None,
                 scores=[self.scores[key]] if self.scores is not None else None,
+                dataset_sources=[self.dataset_sources[key]] if self.dataset_sources is not None else None,
             )
         else:
             # Handle list of indices: batch[[1,3,5]]
@@ -90,6 +93,7 @@ class Batch:
                 else None,
                 indices=[self.indices[i] for i in key] if self.indices is not None else None,
                 scores=[self.scores[i] for i in key] if self.scores is not None else None,
+                dataset_sources=[self.dataset_sources[i] for i in key] if self.dataset_sources is not None else None,
             )
 
 
@@ -747,8 +751,10 @@ def print_rich_single_line_metrics(metrics):
         values = grouped_metrics[category]
         value_strings = []
         for key, value in values:
-            # Use the last part of the key as the display name
-            display_name = key.split("/")[-1]
+            # Use everything after the category prefix as the display name
+            # e.g., "benchmark/MATH500/scores" -> "MATH500/scores"
+            parts = key.split("/")
+            display_name = "/".join(parts[1:]) if len(parts) > 1 else key
             value_strings.append(f"{display_name}: {format_value(value)}")
 
         # Join all values for this category into a single string
