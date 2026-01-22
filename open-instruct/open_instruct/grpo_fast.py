@@ -1219,6 +1219,8 @@ class PolicyTrainerRayProcess(RayProcess):
         self.wandb_url = wandb_url
         torch.cuda.set_device(self.local_rank)
         self.device = torch.device(self.local_rank)
+        self.node = socket.getfqdn()
+        self.assigned_gpu_ids = utils.get_assigned_gpu_ids()
 
         # Set seeds for this worker (different per rank to avoid correlation)
         worker_seed = args.seed + self.local_rank
@@ -1538,6 +1540,7 @@ class PolicyTrainerRayProcess(RayProcess):
         pad_token_id: int,
         num_mini_batches: int,
     ):
+        step_start_time = time.perf_counter()
         args = self.args
         to_device_inplace(collated_query_responses, self.device)
         to_device_inplace(collated_tool_masks, self.device)
@@ -1846,8 +1849,31 @@ class PolicyTrainerRayProcess(RayProcess):
                 self.local_metrics["val/advantage_abs_mean"] = advantage_stats.mean()
                 if args.record_entropy:
                     self.local_metrics["policy/entropy_avg"] = entropy_stats.mean()
-                self.local_metrics["lr"] = self.scheduler.get_last_lr()[0]
-                return self.local_metrics.get_metrics_list()
+            self.local_metrics["lr"] = self.scheduler.get_last_lr()[0]
+        # Lightweight per-learner GPU/utilization signals (unique keys to avoid aggregation).
+        token_count = sum(t.numel() for t in collated_query_responses)
+        step_time = max(time.perf_counter() - step_start_time, 1e-6)
+        self.local_metrics[f"GPUs/learner_rank_{self.rank}/tokens_per_sec"] = token_count / step_time
+        gpu_stats = utils.get_gpu_monitor_info(self.assigned_gpu_ids)
+        util = gpu_stats["utilization"][0] if gpu_stats.get("utilization") else 0.0
+        mem_used = gpu_stats["memory_used"][0] if gpu_stats.get("memory_used") else 0.0
+        mem_total = gpu_stats["memory_total"][0] if gpu_stats.get("memory_total") else 1.0
+        self.local_metrics[f"GPUs/learner_rank_{self.rank}/gpu_util_pct"] = util
+        self.local_metrics[f"GPUs/learner_rank_{self.rank}/memory_used_gb"] = mem_used / 1e9
+        self.local_metrics[f"GPUs/learner_rank_{self.rank}/memory_frac"] = mem_used / mem_total if mem_total else 0.0
+        return self.local_metrics.get_metrics_list()
+
+    def get_gpu_monitor_snapshot(self) -> dict[str, Any]:
+        stats = utils.get_gpu_monitor_info(self.assigned_gpu_ids)
+        return {
+            "role": "learner",
+            "rank": self.rank,
+            "node": self.node,
+            "gpu_ids": stats.get("gpu_ids"),
+            "gpu_utilization": stats.get("utilization"),
+            "gpu_memory_used": stats.get("memory_used"),
+            "gpu_memory_total": stats.get("memory_total"),
+        }
 
     def save_checkpoint_state(self, checkpoint_state_dir: str, client_state: dict[str, Any]) -> None:
         args = self.args
@@ -2031,6 +2057,62 @@ class ModelGroup:
                 scheduling_strategy=scheduling_strategy,
             ).remote(world_size, rank, 0, master_addr, master_port)
             self.models.append(worker_policy)
+
+    def get_gpu_infos(self) -> list[dict[str, Any]]:
+        infos, _ = ray_get_with_progress(
+            [model.get_gpu_monitor_snapshot.remote() for model in self.models], desc="Collecting learner GPU info"
+        )
+        return infos
+
+
+def log_gpu_assignments(
+    policy_group: ModelGroup, vllm_engines: list[vllm_utils.LLMRayActor], with_tracking: bool
+) -> None:
+    """Log node/GPU placement for learners and engines to stdout and wandb."""
+    learner_infos = policy_group.get_gpu_infos()
+    engine_infos, _ = ray_get_with_progress(
+        [engine.get_gpu_monitor_snapshot.remote() for engine in vllm_engines], desc="Collecting engine GPU info"
+    )
+    rows = []
+    for info in learner_infos:
+        rows.append(
+            [
+                "learner",
+                info.get("rank"),
+                info.get("node"),
+                ",".join(map(str, info.get("gpu_ids") or [])),
+                ",".join(map(str, info.get("gpu_utilization") or [])),
+                ",".join(map(str, info.get("gpu_memory_used") or [])),
+                ",".join(map(str, info.get("gpu_memory_total") or [])),
+            ]
+        )
+    for info in engine_infos:
+        rows.append(
+            [
+                "engine",
+                info.get("engine_index"),
+                info.get("node"),
+                ",".join(map(str, info.get("gpu_ids") or [])),
+                ",".join(map(str, info.get("gpu_utilization") or [])),
+                ",".join(map(str, info.get("gpu_memory_used") or [])),
+                ",".join(map(str, info.get("gpu_memory_total") or [])),
+            ]
+        )
+    logger.info("GPU assignments (role, idx, node, gpu_ids, util_pct, mem_used, mem_total):")
+    for row in rows:
+        logger.info(row)
+
+    if with_tracking:
+        try:
+            import wandb
+
+            table = wandb.Table(
+                columns=["role", "index", "node", "gpu_ids", "util_pct", "mem_used_bytes", "mem_total_bytes"],
+                data=rows,
+            )
+            wandb.log({"GPUs/assignments": table}, step=0)
+        except Exception as exc:
+            logger.warning(f"Failed to log GPU assignments to wandb: {exc}")
 
 
 def calculate_utilization_metrics(
@@ -2369,6 +2451,7 @@ def accumulate_inference_batches(
         disable=not args.verbose,
     )
     num_prompts_sampled = 0
+    engine_metrics_accumulator: dict[str, dict[str, Any]] = {}
     while num_prompts_sampled < num_prompts:
         result = inference_results_Q.get(timeout=timeout)
 
@@ -2491,6 +2574,39 @@ def accumulate_inference_batches(
         all_scores.extend(scores)
         all_reward_metrics.append(reward_metrics)
         all_percent_solved.append(percent_solved)
+        engine_key = result.engine_id or (
+            f"engine_{result.engine_index}" if result.engine_index is not None else "engine"
+        )
+        em = engine_metrics_accumulator.setdefault(
+            engine_key,
+            {
+                "token_count": 0,
+                "generation_time": 0.0,
+                "prompt_lengths": [],
+                "response_lengths": [],
+                "gpu_utilization": [],
+                "gpu_memory_used": [],
+                "gpu_memory_total": [],
+            },
+        )
+        if result.token_statistics:
+            em["token_count"] += (
+                result.token_statistics.num_prompt_tokens + result.token_statistics.num_response_tokens
+            )
+            em["generation_time"] += result.token_statistics.generation_time
+        if result.prompt_lengths:
+            # Store one prompt length per prompt; response lengths track per-sample outputs.
+            em["prompt_lengths"].append(result.prompt_lengths[0])
+        else:
+            em["prompt_lengths"].append(len(query))
+        if result.response_lengths:
+            em["response_lengths"].extend(result.response_lengths)
+        if result.gpu_utilization:
+            em["gpu_utilization"].extend(result.gpu_utilization)
+        if result.gpu_memory_used:
+            em["gpu_memory_used"].extend(result.gpu_memory_used)
+        if result.gpu_memory_total:
+            em["gpu_memory_total"].extend(result.gpu_memory_total)
 
     # Combine all results into a single GenerationResult
     combined_responses = []
@@ -2585,6 +2701,33 @@ def accumulate_inference_batches(
     )
 
     combined_reward_metrics = combine_reward_metrics(all_reward_metrics)
+    per_engine_metrics = {}
+    for engine_id, data in engine_metrics_accumulator.items():
+        prefix = f"GPUs/{engine_id}"
+        total_time = max(data.get("generation_time", 0.0), 1e-6)
+        tokens = data.get("token_count", 0)
+        per_engine_metrics[f"{prefix}/tokens_per_sec"] = tokens / total_time
+        if model_dims is not None and data.get("prompt_lengths") and data.get("response_lengths"):
+            actor_util = model_dims.calculate_actor_utilization(
+                prompt_lengths=data["prompt_lengths"],
+                response_lengths=data["response_lengths"],
+                total_generation_time=total_time,
+                # Use the actual sampling config for this accumulation (eval/benchmark use n=1)
+                samples_per_prompt=generation_config.n,
+                num_engines=1,
+                num_gpus_per_engine=args.vllm_tensor_parallel_size,
+            )
+            per_engine_metrics[f"{prefix}/actor_mfu"] = actor_util.get("mfu", 0.0)
+            per_engine_metrics[f"{prefix}/actor_mbu"] = actor_util.get("mbu", 0.0)
+        if data.get("gpu_utilization"):
+            per_engine_metrics[f"{prefix}/gpu_util_pct"] = float(np.mean(data["gpu_utilization"]))
+        if data.get("gpu_memory_used"):
+            used_sum = float(np.sum(data["gpu_memory_used"]))
+            total_sum = float(np.sum(data.get("gpu_memory_total", []))) if data.get("gpu_memory_total") else 0.0
+            per_engine_metrics[f"{prefix}/memory_used_gb"] = used_sum / 1e9
+            if total_sum > 0:
+                per_engine_metrics[f"{prefix}/memory_frac"] = used_sum / total_sum
+    combined_reward_metrics.update(per_engine_metrics)
     percent_solved_mean = np.mean(all_percent_solved) if all_percent_solved else 0.0
 
     batch_stats = BatchStatistics(
@@ -3042,7 +3185,9 @@ def setup_datasets(args: Args, tc: TokenizerConfig, tokenizer: PreTrainedTokeniz
 
         # Only keep the columns needed for benchmark evaluation
         # This ensures datasets with different schemas can be concatenated
+        # NOTE: "messages" is needed as intermediate column between auto_convert and rlvr_tokenize
         benchmark_target_columns = [
+            "messages",  # DEFAULT_SFT_MESSAGES_KEY (intermediate, used by rlvr_tokenize)
             "input_ids_prompt",  # INPUT_IDS_PROMPT_KEY
             "prompt",  # RAW_PROMPT_KEY
             "ground_truth",  # GROUND_TRUTHS_KEY
@@ -3431,7 +3576,15 @@ def one_training_step(
 
     ray.get(actor_manager.report_training_step_time.remote(train_timer.duration))
 
-    average_metrics = {k: sum(m[k] for m in metrics_list) / len(metrics_list) for k in metrics_list[0]}
+    common_keys = set(metrics_list[0].keys())
+    for m in metrics_list[1:]:
+        common_keys &= set(m.keys())
+    average_metrics = {k: sum(m[k] for m in metrics_list) / len(metrics_list) for k in common_keys}
+    per_device_metrics = {}
+    for m in metrics_list:
+        for k, v in m.items():
+            if k not in common_keys:
+                per_device_metrics[k] = v
     step_time = time.perf_counter() - start_time
     total_training_time = time.perf_counter() - training_start_time
 
@@ -3463,6 +3616,7 @@ def one_training_step(
         "time/saving": save_time,
         **data_thread_metrics,
         **average_metrics,
+        **per_device_metrics,
         **utilization_metrics,
     }
     # Print only scalar metrics
@@ -3658,6 +3812,8 @@ def maybe_evaluate_benchmark(
                 "HuggingFaceH4/MATH-500": "MATH500",
                 "math-ai/minervamath": "MinervaMAth",
                 "Hothan/OlympiadBench": "OlympiadBench",
+                "math-ai/amc23": "AMC23",
+                "mnoukhov/aime2024-25-rlvr": "AIME",
             }
 
             # Group results by dataset source
@@ -4358,6 +4514,7 @@ def main(args: Args, tc: TokenizerConfig, model_config: ModelConfig):
 
     # Get the model dimensions from one of the engines without loading weights
     model_dims = ray.get(vllm_engines[0].get_model_dims.remote())
+    log_gpu_assignments(policy_group, vllm_engines, args.with_tracking)
 
     generation_configs = create_generation_configs(args)
 

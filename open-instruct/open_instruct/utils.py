@@ -114,6 +114,73 @@ class MetricsTracker:
         return {name: metrics_list[idx] for name, idx in self.names2idx.items()}
 
 
+def parse_cuda_visible_devices(env: dict[str, str] | None = None) -> list[int]:
+    """Parse CUDA_VISIBLE_DEVICES into a list of ints."""
+    env = env or os.environ
+    cvd = env.get("CUDA_VISIBLE_DEVICES")
+    if not cvd:
+        return []
+    try:
+        return [int(x) for x in cvd.split(",") if x != ""]
+    except ValueError:
+        return []
+
+
+def get_assigned_gpu_ids() -> list[int]:
+    """Best-effort detection of GPU IDs assigned to the current process."""
+    ids = parse_cuda_visible_devices()
+    if ids:
+        return ids
+    try:
+        import ray
+
+        ray_ids = ray.get_gpu_ids()
+        if ray_ids:
+            return [int(x) for x in ray_ids]
+    except Exception:
+        pass
+    if torch.cuda.is_available():
+        try:
+            return [int(torch.cuda.current_device())]
+        except Exception:
+            return []
+    return []
+
+
+def get_gpu_monitor_info(gpu_indices: list[int]) -> dict[str, list]:
+    """Return utilization and memory info for the provided GPU indices.
+
+    Uses NVML when available; otherwise returns empty stats but preserves the ids.
+    """
+    stats = {
+        "gpu_ids": [int(g) for g in gpu_indices],
+        "utilization": [],
+        "memory_used": [],
+        "memory_total": [],
+        "device_names": [],
+    }
+    if not gpu_indices:
+        return stats
+    try:
+        import pynvml
+
+        pynvml.nvmlInit()
+        for idx in gpu_indices:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(int(idx))
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            stats["utilization"].append(float(util))
+            stats["memory_used"].append(int(mem.used))
+            stats["memory_total"].append(int(mem.total))
+            try:
+                stats["device_names"].append(pynvml.nvmlDeviceGetName(handle).decode("utf-8"))
+            except Exception:
+                stats["device_names"].append("")
+    except Exception as exc:
+        logger.debug(f"Failed to query NVML for GPUs {gpu_indices}: {exc}")
+    return stats
+
+
 def max_num_processes() -> int:
     """Returns a reasonable default number of processes to run for multiprocessing."""
     if hasattr(os, "sched_getaffinity"):

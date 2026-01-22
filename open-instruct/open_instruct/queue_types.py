@@ -32,11 +32,20 @@ class GenerationResult:
     finish_reasons: list[str]
     masks: list[list[int]]
     request_info: RequestInfo
+    prompt_lengths: list[int] | None = None
+    response_lengths: list[int] | None = None
     dataset_index: int | None = None
     epoch_number: int | None = None
     token_statistics: TokenStatistics | None = None
     start_time: float | None = None
     logprobs: list[list[float]] | None = None
+    engine_id: str | None = None
+    engine_index: int | None = None
+    node: str | None = None
+    gpu_ids: list[int] | None = None
+    gpu_utilization: list[float] | None = None
+    gpu_memory_used: list[int] | None = None
+    gpu_memory_total: list[int] | None = None
     is_benchmark: bool = False
 
 

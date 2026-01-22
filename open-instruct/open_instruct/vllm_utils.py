@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import types
+import socket
 from collections import defaultdict
 from collections.abc import Awaitable
 from concurrent import futures
@@ -47,7 +48,7 @@ from torch.distributed.distributed_c10d import (
 )
 from vllm.v1.core import kv_cache_utils
 
-from open_instruct import logger_utils
+from open_instruct import logger_utils, utils
 from open_instruct.queue_types import GenerationResult, PromptRequest, RequestInfo, TokenStatistics
 from open_instruct.tool_utils.tools import MaxCallsExceededTool, Tool
 from open_instruct.utils import ModelDims, ray_get_with_progress
@@ -307,7 +308,7 @@ def get_triggered_tool(
     return None, None
 
 
-def process_completed_request(request_id, outs, current_time, tools, request_metadata):
+def process_completed_request(request_id, outs, current_time, tools, request_metadata, engine_metadata=None):
     """Process a completed request with all its samples and return the result.
 
     Args:
@@ -381,6 +382,8 @@ def process_completed_request(request_id, outs, current_time, tools, request_met
         ),
         dataset_index=metadata["dataset_index"],
         epoch_number=metadata["epoch_number"],
+        prompt_lengths=[len(metadata["prompt_token_ids"])] * len(response_ids),
+        response_lengths=[len(r) for r in response_ids],
         token_statistics=TokenStatistics(
             num_prompt_tokens=len(metadata["prompt_token_ids"]),
             num_response_tokens=total_generation_tokens,
@@ -388,6 +391,13 @@ def process_completed_request(request_id, outs, current_time, tools, request_met
         ),
         start_time=metadata["start_time"],
         logprobs=logprobs,
+        engine_id=engine_metadata["engine_id"] if engine_metadata else None,
+        engine_index=engine_metadata.get("engine_index") if engine_metadata else None,
+        node=engine_metadata.get("node") if engine_metadata else None,
+        gpu_ids=engine_metadata.get("gpu_ids") if engine_metadata else None,
+        gpu_utilization=engine_metadata.get("gpu_utilization") if engine_metadata else None,
+        gpu_memory_used=engine_metadata.get("gpu_memory_used") if engine_metadata else None,
+        gpu_memory_total=engine_metadata.get("gpu_memory_total") if engine_metadata else None,
         is_benchmark=metadata["is_benchmark"],
     )
     return result, metadata["is_eval"]
@@ -523,6 +533,7 @@ class LLMRayActor:
         eval_results_queue: ray_queue.Queue,
         actor_manager: ray.actor.ActorHandle,
         inflight_updates: bool,
+        engine_index: int | None = None,
         **kwargs,
     ):
         assert_threaded_actor(self)
@@ -531,10 +542,13 @@ class LLMRayActor:
 
         noset_visible_devices = kwargs.pop("noset_visible_devices")
         distributed_executor_backend = kwargs.get("distributed_executor_backend")
+        self.engine_index = engine_index
         self._setup_gpu_visibility(noset_visible_devices, distributed_executor_backend)
         self._setup_and_start_async_engine(args, bundle_indices, kwargs)
         self.inference_batch_size = self.get_kv_cache_info()
         self._init_executor()
+        self.node = socket.getfqdn()
+        self.assigned_gpu_ids = utils.get_assigned_gpu_ids()
 
     def _init_config(
         self, tools: dict[str, Tool] | None, max_tool_calls: dict[str, int] | None, inflight_updates: bool
@@ -650,6 +664,7 @@ class LLMRayActor:
             current_time,
             self.request_outputs[base_request_id]["tools"],
             self.request_metadata,
+            engine_metadata=self._collect_gpu_stats(),
         )
 
         self.request_outputs.pop(base_request_id)
@@ -718,6 +733,22 @@ class LLMRayActor:
                 "update_weight_cuda_ipc", args=(name, dtype, shape, ipc_handles, empty_cache)
             )
         )
+
+    def _collect_gpu_stats(self) -> dict[str, Any]:
+        stats = utils.get_gpu_monitor_info(self.assigned_gpu_ids)
+        return {
+            "engine_id": f"engine_{self.engine_index}" if self.engine_index is not None else None,
+            "engine_index": self.engine_index,
+            "node": self.node,
+            "gpu_ids": stats.get("gpu_ids"),
+            "gpu_utilization": stats.get("utilization"),
+            "gpu_memory_used": stats.get("memory_used"),
+            "gpu_memory_total": stats.get("memory_total"),
+        }
+
+    def get_gpu_monitor_snapshot(self) -> dict[str, Any]:
+        """Expose GPU stats for this engine."""
+        return self._collect_gpu_stats()
 
     def reset_prefix_cache(self) -> None:
         return self._run_async(self.llm_engine.reset_prefix_cache())
@@ -878,6 +909,7 @@ def create_vllm_engines(
                 inflight_updates=inflight_updates,
                 kv_cache_dtype="auto" if not use_fp8_kv_cache else "fp8",
                 calculate_kv_scales=use_fp8_kv_cache,
+                engine_index=i,
             )
         )
 

@@ -1577,7 +1577,13 @@ def auto_convert_benchmark_format(row: Dict[str, Any], tokenizer: PreTrainedToke
         ValueError: If the dataset format cannot be detected
     """
     # Detect format based on available columns
-    if "problem" in row:
+    if DEFAULT_SFT_MESSAGES_KEY in row and GROUND_TRUTHS_KEY in row:
+        # Already in RLVR format (e.g., mnoukhov/aime2024-25-rlvr)
+        # Just ensure the verifier is set correctly
+        if VERIFIER_SOURCE_KEY not in row:
+            row[VERIFIER_SOURCE_KEY] = verifier_name
+        return row
+    elif "problem" in row:
         # MATH-500 style, AIME, AMC, etc.
         question = row["problem"]
         answer = row.get("answer", row.get("solution", ""))
@@ -1586,14 +1592,14 @@ def auto_convert_benchmark_format(row: Dict[str, Any], tokenizer: PreTrainedToke
         question = row["question"]
         answer = row["final_answer"]
     elif "question" in row:
-        # minervamath style and similar
+        # minervamath/AMC style (question/answer)
         question = row["question"]
         answer = row.get("answer", row.get("solution", ""))
     else:
         raise ValueError(
             f"Unknown dataset format. Cannot auto-detect columns. "
             f"Available columns: {list(row.keys())}. "
-            f"Expected one of: 'problem', 'question' with 'answer'/'final_answer'/'solution'"
+            f"Expected one of: 'messages'+'ground_truth', 'problem', 'question' with 'answer'/'final_answer'/'solution'"
         )
 
     # Handle list answers (like OlympiadBench's final_answer)

@@ -51,6 +51,10 @@ LOCAL_EVAL_TIMEOUT="${LOCAL_EVAL_TIMEOUT:-300}"
 #
 
 
+# All benchmarks including new ones
+BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 128 math-ai/amc23 1.0 mnoukhov/aime2024-25-rlvr 1.0 mnoukhov/aime2024-25-rlvr 1.0 Hothan/OlympiadBench:OE_TO_maths_en_COMP 128"
+BENCHMARK_EVAL_SPLITS="test test test test_2024 test_2025 train"
+
 BENCHMARK_EVALS="${BENCHMARK_EVALS:-HuggingFaceH4/MATH-500 100 math-ai/minervamath 100 Hothan/OlympiadBench:OE_TO_maths_en_COMP 100}"
 BENCHMARK_EVAL_SPLITS="${BENCHMARK_EVAL_SPLITS:-test test train}"
 #BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 272 Hothan/OlympiadBench:OE_TO_maths_en_COMP 674" \
