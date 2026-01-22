@@ -3808,24 +3808,31 @@ def maybe_evaluate_benchmark(
         # Compute per-benchmark metrics if dataset_sources is available
         if benchmark_batch.dataset_sources:
             # Map full dataset names to short display names
+            # Format: "dataset_name" or "dataset_name:split" for non-standard splits
             SHORT_BENCHMARK_NAMES = {
                 "HuggingFaceH4/MATH-500": "MATH500",
                 "math-ai/minervamath": "MinervaMAth",
                 "Hothan/OlympiadBench": "OlympiadBench",
                 "math-ai/amc23": "AMC23",
-                "mnoukhov/aime2024-25-rlvr": "AIME",
+                "mnoukhov/aime2024-25-rlvr": "AIME",  # Fallback if no split specified
+                "mnoukhov/aime2024-25-rlvr:test_2024": "AIME2024",
+                "mnoukhov/aime2024-25-rlvr:test_2025": "AIME2025",
             }
 
             # Group results by dataset source
             source_to_indices = defaultdict(list)
             for idx, source in enumerate(benchmark_batch.dataset_sources):
                 if source:  # Only include if source is not None
-                    # Use short name if available, otherwise clean up the full name
-                    # Strip config suffix (e.g., "Hothan/OlympiadBench:OE_TO_maths_en_COMP" -> "Hothan/OlympiadBench")
-                    base_source = source.split(":")[0]
-                    short_name = SHORT_BENCHMARK_NAMES.get(
-                        base_source, source.replace("/", "_").replace(":", "_").replace("-", "_")
-                    )
+                    # Use short name if available - check full source first (with split), then base name
+                    # e.g., "mnoukhov/aime2024-25-rlvr:test_2024" -> "AIME2024"
+                    # e.g., "Hothan/OlympiadBench:OE_TO_maths_en_COMP" -> "OlympiadBench" (via base_source)
+                    if source in SHORT_BENCHMARK_NAMES:
+                        short_name = SHORT_BENCHMARK_NAMES[source]
+                    else:
+                        base_source = source.split(":")[0]
+                        short_name = SHORT_BENCHMARK_NAMES.get(
+                            base_source, source.replace("/", "_").replace(":", "_").replace("-", "_")
+                        )
                     source_to_indices[short_name].append(idx)
 
             # Compute metrics for each benchmark dataset

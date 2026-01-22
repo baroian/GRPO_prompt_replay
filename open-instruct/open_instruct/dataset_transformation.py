@@ -1788,10 +1788,17 @@ def get_dataset_v1(dc: DatasetConfig, tc: TokenizerConfig):
     dataset = dc.dataset
 
     # Add dataset source field to track origin after shuffling
+    # Include split in source name for non-standard splits (e.g., test_2024, test_2025)
+    # This allows distinguishing between different splits of the same dataset in metrics
+    standard_splits = {"train", "test", "validation", "dev"}
+    if dc.dataset_split in standard_splits:
+        source_name = dc.dataset_name
+    else:
+        source_name = f"{dc.dataset_name}:{dc.dataset_split}"
     dataset = dataset.map(
-        lambda example: {**example, DATASET_ORIGIN_KEY: dc.dataset_name},
+        lambda example, src=source_name: {**example, DATASET_ORIGIN_KEY: src},
         num_proc=num_proc,
-        desc=f"Adding dataset source field for {dc.dataset_name}",
+        desc=f"Adding dataset source field for {source_name}",
     )
     for fn_name, fn_args in zip(dc.transform_fn, dc.transform_fn_args):
         fn, fn_type = TRANSFORM_FNS[fn_name]
