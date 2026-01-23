@@ -4,7 +4,7 @@
 #SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/olmo3_final_pres/base_%j.out  # Standard output and error log (%j expands to jobId0
 #SBATCH --partition=gpu_h100           # Partition (queue)
 #SBATCH --gres=gpu:h100:4              # Request N H100 GPU
-#SBATCH --time=03:00:00                # Time limit (HH:MM:SS)
+#SBATCH --time=10:00:00                # Time limit (HH:MM:SS)
 #SBATCH --nodes=1                      # Number of nodes
 #SBATCH --ntasks-per-node=4            # Number of tasks (processes) per node
 
@@ -35,7 +35,9 @@ export RAY_DASHBOARD_ENABLED=${RAY_DASHBOARD_ENABLED:-0}
 
 #DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 1500 saurabh5/MATH_3000_Filtered_olmo_completions_new_template_filtered 500"
 
-DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 8000"
+#DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 10000"
+
+DATASETS="allenai/Dolci-RL-Zero-Math-7B 1.0"
 
 
 export DATASETS="${DATASETS}"
@@ -44,15 +46,15 @@ export DATASETS="${DATASETS}"
 
 
 export EVALS="${EVALS:-aime:zs_cot_r1::pass_at_32_2024_dapo,aime:zs_cot_r1::pass_at_32_2025_dapo}"
-export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-128}" # FOR TESTING USE ONLY 16
+export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:256}" # FOR TESTING USE ONLY 16
 
 # Prompt replay settings
-export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
-export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.5}"
-export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-20}"
-export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-10}"
+export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-True}"
+export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.75}"
+export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-10}"
+export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-15}"
 export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.2}"
-export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.7}"
+export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.8}"
 
 # Prompt pass curriculum settings
 export ENABLE_PROMPT_PASS_CURRICULUM="${ENABLE_PROMPT_PASS_CURRICULUM:-False}"
@@ -81,7 +83,7 @@ hours=$(date -d @"$now" -u +%H)
 minutes=$(date -d @"$now" -u +%M)
 seconds=$(date -d @"$now" -u +%S)
 
-name="baseline"
+name="prompt_replay_10cooldown"
 
 export EXP_NAME="${EXP_NAME:-${name}_}"
 

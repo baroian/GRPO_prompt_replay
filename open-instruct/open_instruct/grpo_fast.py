@@ -898,8 +898,13 @@ class ShufflingIterator:
                 # Drop prompts that have exhausted their reuse budget.
                 continue
             scheduled_step = target_step
+            # to introduce random add offset + - 20% of the cooldown steps
+            offset = max(1, int(round(self.replay_cooldown_steps * 0.2)))
+            offseted_cooldown_steps = self.rng.integers(
+                max(1, self.replay_cooldown_steps - offset), self.replay_cooldown_steps + offset + 1
+            )
             cooldown_ready_step = (
-                target_step + self.replay_cooldown_steps if self.replay_cooldown_steps > 0 else target_step
+                target_step + offseted_cooldown_steps if self.replay_cooldown_steps > 0 else target_step
             )
             candidate = (dataset_index, scheduled_step, cooldown_ready_step)
             break

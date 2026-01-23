@@ -52,7 +52,7 @@ LOCAL_EVAL_TIMEOUT="${LOCAL_EVAL_TIMEOUT:-300}"
 
 
 # All benchmarks including new ones
-BENCHMARK_EVALS="HuggingFaceH4/MATH-500 128 math-ai/minervamath 128 math-ai/amc23 1.0 mnoukhov/aime2024-25-rlvr 1.0 mnoukhov/aime2024-25-rlvr 1.0 Hothan/OlympiadBench:OE_TO_maths_en_COMP 128"
+BENCHMARK_EVALS="HuggingFaceH4/MATH-500 1.0 math-ai/minervamath 1.0 math-ai/amc23 1.0 mnoukhov/aime2024-25-rlvr 1.0 mnoukhov/aime2024-25-rlvr 1.0 Hothan/OlympiadBench:OE_TO_maths_en_COMP 1.0"
 BENCHMARK_EVAL_SPLITS="test test test test_2024 test_2025 train"
 
 BENCHMARK_EVALS="${BENCHMARK_EVALS:-HuggingFaceH4/MATH-500 100 math-ai/minervamath 100 Hothan/OlympiadBench:OE_TO_maths_en_COMP 100}"
@@ -153,7 +153,7 @@ uv run python open_instruct/grpo_fast.py \
     --chat_template_name olmo_thinker_dapo \
     --non_stop_penalty False \
     --temperature 1.0 \
-    --total_episodes 512000 \
+    --total_episodes 1000000 \
     --deepspeed_stage 2 \
     --num_learners_per_node 2 \
     --vllm_num_engines 2\
@@ -162,16 +162,16 @@ uv run python open_instruct/grpo_fast.py \
     --apply_verifiable_reward true \
     --record_entropy true \
     --seed ${seed} \
-    --local_eval_every 20 \
-    --save_freq 5000 \
-    --checkpoint_state_freq 5000 \
+    --local_eval_every 40 \
+    --save_freq 150 \
+    --checkpoint_state_freq 150 \
     --checkpoint_state_dir "${CHECKPOINT_STATE_DIR}" \
     --gradient_checkpointing \
     --vllm_enable_prefix_caching \
     --clip_higher 0.272 \
     --mask_truncated_completions True \
     --with_tracking \
-    --wandb_project_name "olmo3_curriculum" \
+    --wandb_project_name "final_runs" \
     --eval_on_step_0 True \
     --output_dir "${OUTPUT_DIR}" \
     --prompt_pass_table_dir "${OPEN_INSTRUCT_ROOT}/UC" \
