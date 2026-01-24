@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPEN_INSTRUCT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 REPO_ROOT="$(cd "${OPEN_INSTRUCT_ROOT}/.." && pwd)"
 
-MODEL_NAME_OR_PATH="Qwen/Qwen2.5-Math-1.5B"
-GS_MODEL_NAME="qwen25_math_1_5b"
+MODEL_NAME_OR_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+GS_MODEL_NAME="r1_distill_qwen25_math_1_5b"
 #MODEL_NAME_OR_PATH="allenai/Olmo-3-1025-7B"
 #GS_MODEL_NAME="olmo3-1025-7b"
 
@@ -120,6 +120,10 @@ fi
 
 #NOTE IN FLIGHTS ARE TERRIBLY SLOW - nevermind, they work great
 #    --inflight_updates \
+
+
+#MODEL_NAME_OR_PATH="/scratch-shared/rberber/rlvr/outputs/qwen25-math-rlzero-math/checkpoints/prompt_replay_5cooldown___123__1769199032_checkpoints/step_750"
+#CHECKPOINT_STATE_DIR="/scratch-shared/rberber/rlvr/outputs/qwen25-math-rlzero-math/checkpoints/state_20260123_211005"
 
 
 # shellcheck disable=SC2086

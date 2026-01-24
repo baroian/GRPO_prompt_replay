@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=base    # Name of your job
-#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/olmo3_final_pres/base_%j.out  # Standard output and error log (%j expands to jobId0
+#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/reports/base_%j.out  # Standard output and error log (%j expands to jobId0
 #SBATCH --partition=gpu_h100           # Partition (queue)
 #SBATCH --gres=gpu:h100:4              # Request N H100 GPU
 #SBATCH --time=10:00:00                # Time limit (HH:MM:SS)
@@ -38,6 +38,7 @@ export RAY_DASHBOARD_ENABLED=${RAY_DASHBOARD_ENABLED:-0}
 #DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 10000"
 
 DATASETS="allenai/Dolci-RL-Zero-Math-7B 1.0"
+#DATASETS="ai2-adapt-dev/deepscaler-gt 1.0"
 
 
 export DATASETS="${DATASETS}"
@@ -49,12 +50,12 @@ export EVALS="${EVALS:-aime:zs_cot_r1::pass_at_32_2024_dapo,aime:zs_cot_r1::pass
 export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:256}" # FOR TESTING USE ONLY 16
 
 # Prompt replay settings
-export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-True}"
-export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.75}"
-export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-10}"
-export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-15}"
-export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.2}"
-export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.8}"
+export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
+export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.9}"
+export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-5}"
+export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-30}"
+export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.01}"
+export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.85}"
 
 # Prompt pass curriculum settings
 export ENABLE_PROMPT_PASS_CURRICULUM="${ENABLE_PROMPT_PASS_CURRICULUM:-False}"
@@ -69,8 +70,8 @@ export NO_RESAMPLING_PASS_RATE="${NO_RESAMPLING_PASS_RATE:-0.9}"
 
 # Length settings
 export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
-export RESPONSE_LEN="${RESPONSE_LEN:-3584}"
-export PACK_LEN="${PACK_LEN:-4096}"
+export RESPONSE_LEN="${RESPONSE_LEN:-7684}"
+export PACK_LEN="${PACK_LEN:-8196}"
 
 # VLLM num engines
 export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-1}"
@@ -83,7 +84,7 @@ hours=$(date -d @"$now" -u +%H)
 minutes=$(date -d @"$now" -u +%M)
 seconds=$(date -d @"$now" -u +%S)
 
-name="prompt_replay_10cooldown"
+name="base_r1_distill_qwen"
 
 export EXP_NAME="${EXP_NAME:-${name}_}"
 
