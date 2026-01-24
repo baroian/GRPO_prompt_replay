@@ -8,7 +8,14 @@
 #SBATCH --nodes=1                      # Number of nodes
 #SBATCH --ntasks-per-node=4            # Number of tasks (processes) per node
 
+
+#############################################
+# ================== SETUP ==================
+#############################################
+
 echo "Initial working directory: $(pwd)"
+
+module purge
 
 module load 2024
 module load CUDA/12.6.0
@@ -27,8 +34,65 @@ export UV_NO_DEV=${UV_NO_DEV:-1}
 export RAY_DASHBOARD_ENABLED=${RAY_DASHBOARD_ENABLED:-0}
 
 
-. GRPO_prompt_replay/open-instruct/node_setup.sh
+# Tell uv to use the existing venv instead of creating a new one in Ray workers
+# This prevents version mismatches when Ray packages the project
+# Use realpath to handle symlinks (e.g., /home/rberger -> /gpfs/home6/rberger)
+export UV_PROJECT_ENVIRONMENT="$(realpath /home/rberger/rlvr/GRPO_prompt_replay/open-instruct/.venv)"
 
+
+cd /home/rberger/rlvr
+
+# Auth (ensure these are set in your environment before running) from .env file
+set -a
+source .env
+set +a
+
+cd /home/rberger/rlvr/GRPO_prompt_replay/open-instruct
+
+# Ensure the local editable dependency exists for uv sync.
+if [[ ! -d vllm_olmo2.5 ]]; then
+    echo "[info] Cloning custom vLLM fork into vllm_olmo2.5..."
+    git clone -b shanea/olmo2-retrofit https://github.com/2015aroras/vllm.git vllm_olmo2.5
+fi
+
+pip install uv
+
+uv sync
+
+uv pip install torch
+
+# Environment (adjust as needed for your cluster session)
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
+export TOKENIZERS_PARALLELISM=false
+export HF_HUB_ENABLE_HF_TRANSFER=1
+
+export SCRATCH_CACHE_ROOT=${SCRATCH_CACHE_ROOT:-/scratch-shared/rberber/cache}
+mkdir -p "${SCRATCH_CACHE_ROOT}"
+export HF_HOME="${HF_HOME:-${SCRATCH_CACHE_ROOT}/hf_home}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-${SCRATCH_CACHE_ROOT}/transformers_cache}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_CACHE_ROOT}/hf_datasets_cache}"
+export RAY_TMPDIR="${RAY_TMPDIR:-${SCRATCH_CACHE_ROOT}/ray_tmp}"
+export TORCH_HOME="${TORCH_HOME:-${SCRATCH_CACHE_ROOT}/torch_home}"
+mkdir -p "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE" "$RAY_TMPDIR" "$TORCH_HOME"
+
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-"max_split_size_mb:256"}
+# Single-node NCCL usually doesn't need IB; disable to avoid hiccups
+export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
+# Mirrors program default but set here too
+export NCCL_CUMEM_ENABLE=0
+
+cd /home/rberger/rlvr/GRPO_prompt_replay/open-instruct
+
+export RAY_ADDRESS=local
+
+
+
+#############################################
+# ================== RUNCONFIG ==================
+#############################################
+
+MODEL_NAME_OR_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+GS_MODEL_NAME="r1distill_qwen25_math_1_5b"
 
 
 #DATASETS="${DATASETS:-ai2-adapt-dev/rlvr_open_reasoner_math 4000}"
@@ -36,6 +100,7 @@ export RAY_DASHBOARD_ENABLED=${RAY_DASHBOARD_ENABLED:-0}
 #DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 1500 saurabh5/MATH_3000_Filtered_olmo_completions_new_template_filtered 500"
 
 #DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 10000"
+
 
 DATASETS="allenai/Dolci-RL-Zero-Math-7B 1.0"
 #DATASETS="ai2-adapt-dev/deepscaler-gt 1.0"
@@ -70,8 +135,8 @@ export NO_RESAMPLING_PASS_RATE="${NO_RESAMPLING_PASS_RATE:-0.9}"
 
 # Length settings
 export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
-export RESPONSE_LEN="${RESPONSE_LEN:-7684}"
-export PACK_LEN="${PACK_LEN:-8196}"
+export RESPONSE_LEN="${RESPONSE_LEN:-7680}"
+export PACK_LEN="${PACK_LEN:-8192}"
 
 # VLLM num engines
 export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-1}"

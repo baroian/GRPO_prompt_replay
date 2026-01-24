@@ -2263,6 +2263,7 @@ class PromptPassTableLogger:
         df = self._build_dataframe()
         if df.empty:
             return
+        os.makedirs(self.run_dir, exist_ok=True)
         df.to_csv(self.table_path, index=False)
         if wandb_step is not None and self.enable_wandb_logging:
             wandb.log({"prompt_pass_rates": wandb.Table(dataframe=df)}, step=wandb_step)
@@ -2296,6 +2297,7 @@ class PromptReuseLogger:
     def save(self) -> None:
         if not self._rows:
             return
+        os.makedirs(self.run_dir, exist_ok=True)
         df = pd.DataFrame(self._rows)
         df.to_csv(self.table_path, index=False)
 

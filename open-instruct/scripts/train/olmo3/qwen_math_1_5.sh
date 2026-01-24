@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPEN_INSTRUCT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 REPO_ROOT="$(cd "${OPEN_INSTRUCT_ROOT}/.." && pwd)"
 
-MODEL_NAME_OR_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-GS_MODEL_NAME="r1_distill_qwen25_math_1_5b"
+MODEL_NAME_OR_PATH="${MODEL_NAME_OR_PATH:-deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B}"
+GS_MODEL_NAME="${GS_MODEL_NAME:-r1distill_qwen25_math_1_5b}"
 #MODEL_NAME_OR_PATH="allenai/Olmo-3-1025-7B"
 #GS_MODEL_NAME="olmo3-1025-7b"
 
@@ -93,12 +93,9 @@ export VLLM_ALLOW_INSECURE_SERIALIZATION=1
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 CHECKPOINT_STATE_DIR="${OUTPUT_DIR}/state_${RUN_ID}"
 
-NODE_SETUP="${OPEN_INSTRUCT_ROOT}/node_setup.sh"
 
 seed=${SEED:-1}
 
-# shellcheck disable=SC1090
-source "${NODE_SETUP}"
 
 cd "${OPEN_INSTRUCT_ROOT}"
 
