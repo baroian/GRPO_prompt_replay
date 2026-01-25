@@ -1858,14 +1858,14 @@ class PolicyTrainerRayProcess(RayProcess):
         # Lightweight per-learner GPU/utilization signals (unique keys to avoid aggregation).
         token_count = sum(t.numel() for t in collated_query_responses)
         step_time = max(time.perf_counter() - step_start_time, 1e-6)
-        self.local_metrics[f"GPUs/learner_rank_{self.rank}/tokens_per_sec"] = token_count / step_time
+        self.local_metrics[f"GPUs/learner_tokens_per_sec/rank_{self.rank}"] = token_count / step_time
         gpu_stats = utils.get_gpu_monitor_info(self.assigned_gpu_ids)
         util = gpu_stats["utilization"][0] if gpu_stats.get("utilization") else 0.0
         mem_used = gpu_stats["memory_used"][0] if gpu_stats.get("memory_used") else 0.0
         mem_total = gpu_stats["memory_total"][0] if gpu_stats.get("memory_total") else 1.0
-        self.local_metrics[f"GPUs/learner_rank_{self.rank}/gpu_util_pct"] = util
-        self.local_metrics[f"GPUs/learner_rank_{self.rank}/memory_used_gb"] = mem_used / 1e9
-        self.local_metrics[f"GPUs/learner_rank_{self.rank}/memory_frac"] = mem_used / mem_total if mem_total else 0.0
+        self.local_metrics[f"GPUs/learner_gpu_util/rank_{self.rank}"] = util
+        self.local_metrics[f"GPUs/learner_memory_used_gb/rank_{self.rank}"] = mem_used / 1e9
+        self.local_metrics[f"GPUs/learner_memory_frac/rank_{self.rank}"] = mem_used / mem_total if mem_total else 0.0
         return self.local_metrics.get_metrics_list()
 
     def get_gpu_monitor_snapshot(self) -> dict[str, Any]:
@@ -2582,7 +2582,7 @@ def accumulate_inference_batches(
         all_reward_metrics.append(reward_metrics)
         all_percent_solved.append(percent_solved)
         engine_key = result.engine_id or (
-            f"engine_{result.engine_index}" if result.engine_index is not None else "engine"
+            f"actor_{result.engine_index}" if result.engine_index is not None else "actor"
         )
         em = engine_metrics_accumulator.setdefault(
             engine_key,
@@ -2709,11 +2709,12 @@ def accumulate_inference_batches(
 
     combined_reward_metrics = combine_reward_metrics(all_reward_metrics)
     per_engine_metrics = {}
+    actor_gpu_utils = []
+    actor_memory_fracs = []
     for engine_id, data in engine_metrics_accumulator.items():
-        prefix = f"GPUs/{engine_id}"
         total_time = max(data.get("generation_time", 0.0), 1e-6)
         tokens = data.get("token_count", 0)
-        per_engine_metrics[f"{prefix}/tokens_per_sec"] = tokens / total_time
+        per_engine_metrics[f"GPUs/actor_tokens_per_sec/{engine_id}"] = tokens / total_time
         if model_dims is not None and data.get("prompt_lengths") and data.get("response_lengths"):
             actor_util = model_dims.calculate_actor_utilization(
                 prompt_lengths=data["prompt_lengths"],
@@ -2724,16 +2725,27 @@ def accumulate_inference_batches(
                 num_engines=1,
                 num_gpus_per_engine=args.vllm_tensor_parallel_size,
             )
-            per_engine_metrics[f"{prefix}/actor_mfu"] = actor_util.get("mfu", 0.0)
-            per_engine_metrics[f"{prefix}/actor_mbu"] = actor_util.get("mbu", 0.0)
+            per_engine_metrics[f"GPUs/actor_mfu/{engine_id}"] = actor_util.get("mfu", 0.0)
+            per_engine_metrics[f"GPUs/actor_mbu/{engine_id}"] = actor_util.get("mbu", 0.0)
         if data.get("gpu_utilization"):
-            per_engine_metrics[f"{prefix}/gpu_util_pct"] = float(np.mean(data["gpu_utilization"]))
+            gpu_util = float(np.mean(data["gpu_utilization"]))
+            per_engine_metrics[f"GPUs/actor_gpu_util/{engine_id}"] = gpu_util
+            actor_gpu_utils.append(gpu_util)
         if data.get("gpu_memory_used"):
             used_sum = float(np.sum(data["gpu_memory_used"]))
             total_sum = float(np.sum(data.get("gpu_memory_total", []))) if data.get("gpu_memory_total") else 0.0
-            per_engine_metrics[f"{prefix}/memory_used_gb"] = used_sum / 1e9
+            per_engine_metrics[f"GPUs/actor_memory_used_gb/{engine_id}"] = used_sum / 1e9
             if total_sum > 0:
-                per_engine_metrics[f"{prefix}/memory_frac"] = used_sum / total_sum
+                mem_frac = used_sum / total_sum
+                per_engine_metrics[f"GPUs/actor_memory_frac/{engine_id}"] = mem_frac
+                actor_memory_fracs.append(mem_frac)
+
+    # Aggregate actor GPU metrics (mean across all engines, on same graph)
+    if actor_gpu_utils:
+        per_engine_metrics["GPUs/actor_gpu_util/mean"] = float(np.mean(actor_gpu_utils))
+    if actor_memory_fracs:
+        per_engine_metrics["GPUs/actor_memory_frac/mean"] = float(np.mean(actor_memory_fracs))
+
     combined_reward_metrics.update(per_engine_metrics)
     percent_solved_mean = np.mean(all_percent_solved) if all_percent_solved else 0.0
 
@@ -3592,6 +3604,15 @@ def one_training_step(
         for k, v in m.items():
             if k not in common_keys:
                 per_device_metrics[k] = v
+
+    # Aggregate learner GPU metrics (mean across all ranks, on same graph)
+    learner_gpu_utils = [v for k, v in per_device_metrics.items() if k.startswith("GPUs/learner_gpu_util/")]
+    learner_memory_fracs = [v for k, v in per_device_metrics.items() if k.startswith("GPUs/learner_memory_frac/")]
+    if learner_gpu_utils:
+        per_device_metrics["GPUs/learner_gpu_util/mean"] = float(np.mean(learner_gpu_utils))
+    if learner_memory_fracs:
+        per_device_metrics["GPUs/learner_memory_frac/mean"] = float(np.mean(learner_memory_fracs))
+
     step_time = time.perf_counter() - start_time
     total_training_time = time.perf_counter() - training_start_time
 

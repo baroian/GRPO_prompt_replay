@@ -1,14 +1,16 @@
 #!/bin/bash
 
-#SBATCH --job-name=grpo_7b_mn    # Name of your job
-#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/reports/grpo_7b_mn_%j.out  # Standard output and error log (%j expands to jobId)
+#SBATCH --job-name=olmo    # Name of your job
+#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/olmo/grpo_7b_mn_%j.out  # Standard output and error log (%j expands to jobId)
 #SBATCH --partition=gpu_h100           # Partition (queue)
 #SBATCH --gres=gpu:h100:4              # Request N H100 GPU per node
-#SBATCH --time=01:30:00                # Time limit (HH:MM:SS)
-#SBATCH --nodes=2                      # Number of nodes
+#SBATCH --time=24:00:00                # Time limit (HH:MM:SS)
+#SBATCH --nodes=3                      # Number of nodes
 #SBATCH --ntasks-per-node=1            # One Ray daemon per node
 
 set -euo pipefail
+
+name="qwen_7b_dolci"
 
 #############################################
 # ================== SETUP ==================
@@ -102,6 +104,8 @@ head_node="${nodes[0]}"
 ray_port="${RAY_PORT:-6379}"
 NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}"
 NUM_CPUS_PER_NODE="${NUM_CPUS_PER_NODE:-${SLURM_CPUS_ON_NODE:-64}}"
+
+# Ray timing configuration
 RAY_HEAD_WAIT_ATTEMPTS="${RAY_HEAD_WAIT_ATTEMPTS:-60}"
 RAY_HEAD_WAIT_SLEEP="${RAY_HEAD_WAIT_SLEEP:-2}"
 RAY_WORKER_CONNECT_ATTEMPTS="${RAY_WORKER_CONNECT_ATTEMPTS:-60}"
@@ -109,6 +113,7 @@ RAY_WORKER_CONNECT_SLEEP="${RAY_WORKER_CONNECT_SLEEP:-2}"
 RAY_JOIN_MAX_ATTEMPTS="${RAY_JOIN_MAX_ATTEMPTS:-60}"
 RAY_JOIN_SLEEP="${RAY_JOIN_SLEEP:-5}"
 
+# Network interface selection
 pick_iface() {
     if [[ -n "${RAY_INTERFACE:-}" ]]; then
         echo "${RAY_INTERFACE}"
@@ -143,47 +148,15 @@ if [[ -z "${NCCL_SOCKET_IFNAME:-}" && -n "${RAY_INTERFACE}" ]]; then
     export NCCL_SOCKET_IFNAME="${RAY_INTERFACE}"
 fi
 
-echo "===== RAY DEBUG BEGIN ====="
-echo "[ray-debug] date: $(date)"
-echo "[ray-debug] job_id: ${SLURM_JOB_ID:-}"
-echo "[ray-debug] nodes: ${nodes[*]}"
-echo "[ray-debug] head_node: ${head_node}"
-echo "[ray-debug] RAY_HEAD_IP env: ${RAY_HEAD_IP:-<unset>}"
-echo "[ray-debug] RAY_INTERFACE: ${RAY_INTERFACE:-<unset>}"
-echo "[ray-debug] RAY_PORT env: ${RAY_PORT:-<unset>}"
-echo "[ray-debug] NUM_GPUS_PER_NODE: ${NUM_GPUS_PER_NODE}"
-echo "[ray-debug] NUM_CPUS_PER_NODE: ${NUM_CPUS_PER_NODE}"
-echo "[ray-debug] RAY_HEAD_WAIT_ATTEMPTS: ${RAY_HEAD_WAIT_ATTEMPTS}"
-echo "[ray-debug] RAY_HEAD_WAIT_SLEEP: ${RAY_HEAD_WAIT_SLEEP}"
-echo "[ray-debug] RAY_WORKER_CONNECT_ATTEMPTS: ${RAY_WORKER_CONNECT_ATTEMPTS}"
-echo "[ray-debug] RAY_WORKER_CONNECT_SLEEP: ${RAY_WORKER_CONNECT_SLEEP}"
-echo "[ray-debug] RAY_JOIN_MAX_ATTEMPTS: ${RAY_JOIN_MAX_ATTEMPTS}"
-echo "[ray-debug] RAY_JOIN_SLEEP: ${RAY_JOIN_SLEEP}"
-echo "[ray-debug] VENV_DIR: ${VENV_DIR}"
-echo "[ray-debug] PATH: ${PATH}"
-echo "[ray-debug] which ray: $(command -v ray || echo '<not-found>')"
-echo "[ray-debug] ray --version: $(${RAY_CMD} --version 2>/dev/null || echo '<failed>')"
-echo "[ray-debug] python -V: $(${VENV_DIR}/bin/python -V 2>/dev/null || echo '<failed>')"
-echo "[ray-debug] NCCL_IB_DISABLE: ${NCCL_IB_DISABLE}"
-echo "[ray-debug] NCCL_SOCKET_IFNAME: ${NCCL_SOCKET_IFNAME:-<unset>}"
-echo "[ray-debug] NCCL_NET_GDR_LEVEL: ${NCCL_NET_GDR_LEVEL:-<unset>}"
-echo "[ray-debug] RAY_TMPDIR: ${RAY_TMPDIR}"
-echo "[ray-debug] RAY_LOG_DIR: ${RAY_LOG_DIR}"
-echo "[ray-debug] RAY_ADDRESS pre-set: ${RAY_ADDRESS:-<unset>}"
+# Source Ray debugging utilities
+source /home/rberger/rlvr/GRPO_prompt_replay/open-instruct/scripts/ray_debug.sh
 
-for node in "${nodes[@]}"; do
-    echo "[ray-debug] ---- node: ${node} ----"
-    srun --nodes=1 --ntasks=1 -w "$node" /bin/bash -c \
-        "echo '[ray-debug] hostname: ' \$(hostname); \
-         echo '[ray-debug] hostname -I: ' \$(hostname -I); \
-         command -v ip >/dev/null 2>&1 && ip -4 addr || true; \
-         command -v ip >/dev/null 2>&1 && ip route | head -n 5 || true; \
-         echo '[ray-debug] ray: ' \$(command -v ray || echo '<not-found>'); \
-         echo '[ray-debug] ray --version: ' \$(${RAY_CMD} --version 2>/dev/null || echo '<failed>'); \
-         echo '[ray-debug] python -V: ' \$(${VENV_DIR}/bin/python -V 2>/dev/null || echo '<failed>');" || true
-done
-echo "===== RAY DEBUG END ====="
+# Print debug info (set RAY_DEBUG=0 to skip)
+if [[ "${RAY_DEBUG:-1}" == "1" ]]; then
+    print_ray_debug_info "${nodes[@]}"
+fi
 
+# Resolve head node IP
 if [[ -n "${RAY_HEAD_IP:-}" ]]; then
     head_node_ip="${RAY_HEAD_IP}"
 else
@@ -199,6 +172,7 @@ fi
 
 echo "[ray] Head node: $head_node ($head_node_ip)"
 
+# Cleanup function
 auto_ray_stop() {
     srun --nodes=1 --ntasks=1 -w "$head_node" "${RAY_CMD}" stop --force >/dev/null 2>&1 || true
     for node in "${nodes[@]:1}"; do
@@ -206,56 +180,11 @@ auto_ray_stop() {
     done
 }
 
-dump_ray_logs() {
-    local node="$1"
-    srun --nodes=1 --ntasks=1 -w "$node" /bin/bash -c \
-        "logroot='${RAY_TMPDIR}'; \
-         echo \"===== RAY LOG DUMP BEGIN (${node}) =====\"; \
-         echo \"logroot: \${logroot}\"; \
-         found_session=\"\"; \
-         for root in \"${RAY_TMPDIR}/ray\" \"${RAY_TMPDIR}\" /tmp/ray; do \
-           if [[ -d \"\${root}\" ]]; then \
-             latest=\$(ls -dt \${root}/session_* 2>/dev/null | head -n1); \
-             if [[ -n \"\${latest}\" ]]; then \
-               echo \"session root: \${root}\"; \
-               echo \"latest session: \${latest}\"; \
-               found_session=\"\${latest}\"; \
-               break; \
-             fi; \
-           fi; \
-         done; \
-         if [[ -n \"\${found_session}\" && -d \"\${found_session}/logs\" ]]; then \
-           for f in raylet.err raylet.out gcs_server.err gcs_server.out monitor.err monitor.out dashboard.log; do \
-             if [[ -f \"\${found_session}/logs/\${f}\" ]]; then \
-               echo \"----- \${f} (tail 200) -----\"; \
-               tail -n 200 \"\${found_session}/logs/\${f}\"; \
-             else \
-               echo \"----- \${f} missing -----\"; \
-             fi; \
-           done; \
-         else \
-           echo \"no session logs found under ${RAY_TMPDIR} or /tmp/ray\"; \
-         fi; \
-         if [[ -d '${RAY_LOG_DIR}' ]]; then \
-           echo \"----- srun logs for ${node} (tail 200) -----\"; \
-           for f in '${RAY_LOG_DIR}'/ray_*_${node}_*.out '${RAY_LOG_DIR}'/ray_*_${node}_*.err '${RAY_LOG_DIR}'/ray_head_*.out '${RAY_LOG_DIR}'/ray_head_*.err; do \
-             if [[ -f \"\${f}\" ]]; then \
-               echo \"----- \${f} -----\"; \
-               tail -n 200 \"\${f}\"; \
-             fi; \
-           done; \
-         fi; \
-         echo \"===== RAY LOG DUMP END (${node}) =====\";" || true
-}
-
+# Exit trap for error logging
 on_exit() {
     status=$?
     if [[ $status -ne 0 ]]; then
-        echo "===== RAY LOG DUMP (ON ERROR) ====="
-        for node in "${nodes[@]}"; do
-            dump_ray_logs "$node"
-        done
-        echo "===== RAY LOG DUMP COMPLETE ====="
+        dump_all_ray_logs "${nodes[@]}"
     fi
 }
 
@@ -279,6 +208,7 @@ srun --nodes=1 --ntasks=1 --cpus-per-task="${NUM_CPUS_PER_NODE}" --gpus-per-task
 
 sleep 10
 
+# Wait for head node to be ready
 echo "[ray] Waiting for head to accept connections..."
 head_ready=0
 for i in $(seq 1 "${RAY_HEAD_WAIT_ATTEMPTS}"); do
@@ -326,61 +256,55 @@ for node in "${nodes[@]:1}"; do
 done
 
 export RAY_ADDRESS="${head_node_ip}:${ray_port}"
-echo "[ray-debug] RAY_ADDRESS set to ${RAY_ADDRESS}"
+echo "[ray] RAY_ADDRESS set to ${RAY_ADDRESS}"
 
+# Wait for all nodes to join
 expected_nodes=${#nodes[@]}
-active_nodes=0
-echo "===== RAY JOIN CHECK BEGIN ====="
-for i in $(seq 1 "${RAY_JOIN_MAX_ATTEMPTS}"); do
-    active_nodes=$(
-        ${RAY_CMD} status --address "${RAY_ADDRESS}" 2>/dev/null | awk '
-            /^Active:/ {in_active=1; next}
-            /^Pending:/ {in_active=0}
-            in_active && /node_/ {count++}
-            END {print count+0}
-        '
-    ) || true
-    active_nodes=$(printf "%s" "${active_nodes}" | tail -n1 | tr -cd '0-9')
-    active_nodes="${active_nodes:-0}"
-    echo "[ray-join] active_nodes=${active_nodes} expected=${expected_nodes}"
-    if [[ "${active_nodes}" =~ ^[0-9]+$ ]] && [[ "${active_nodes}" -ge "${expected_nodes}" ]]; then
-        break
-    fi
-    sleep "${RAY_JOIN_SLEEP}"
-done
-if [[ "${active_nodes}" -lt "${expected_nodes}" ]]; then
-    echo "[ray-join] ERROR: only ${active_nodes}/${expected_nodes} nodes joined; dumping logs."
-    for node in "${nodes[@]}"; do
-        dump_ray_logs "$node"
-    done
+if ! wait_for_ray_cluster "${expected_nodes}" "${nodes[@]}"; then
     exit 1
 fi
-echo "===== RAY JOIN CHECK END ====="
 
-echo "===== RAY STATUS BEGIN ====="
-${RAY_CMD} status --address "${RAY_ADDRESS}" || true
-echo "===== RAY STATUS END ====="
+print_ray_status
 
 #############################################
 # ================== RUNCONFIG ==================
 #############################################
 
-MODEL_NAME_OR_PATH="Qwen/Qwen2.5-7B"
-GS_MODEL_NAME="qwen25-7b"
+name="baseline_olmo_dolci"
+
+### OLMO config 
+export MODEL_NAME_OR_PATH="allenai/Olmo-3-1025-7B"
+export GS_MODEL_NAME="olmo3-1025-7b"
+
+export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-1024}"
+export RESPONSE_LEN="${RESPONSE_LEN:-7168}"
+export PACK_LEN="${PACK_LEN:-8192}"
+
+### QWEN config 
+
+#export MODEL_NAME_OR_PATH="Qwen/Qwen2.5-Math-7B"
+#export GS_MODEL_NAME="qwen25-math-7b"
+
+#export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
+#export RESPONSE_LEN="${RESPONSE_LEN:-3584}"
+#export PACK_LEN="${PACK_LEN:-4096}"
+
+
 
 DATASETS="allenai/Dolci-RL-Zero-Math-7B 1.0"
 export DATASETS="${DATASETS}"
 
 export EVALS="${EVALS:-aime:zs_cot_r1::pass_at_32_2024_dapo,aime:zs_cot_r1::pass_at_32_2025_dapo}"
 export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-256}"
+export EVAL_ON_STEP_0="${EVAL_ON_STEP_0:-True}"
 
 # Prompt replay settings
 export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
 export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.9}"
 export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-5}"
-export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-30}"
+export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-15}"
 export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.01}"
-export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.85}"
+export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.9}"
 
 # Prompt pass curriculum settings
 export ENABLE_PROMPT_PASS_CURRICULUM="${ENABLE_PROMPT_PASS_CURRICULUM:-False}"
@@ -392,14 +316,10 @@ export SEED="${seed}"
 
 export NO_RESAMPLING_PASS_RATE="${NO_RESAMPLING_PASS_RATE:-0.9}"
 
-# Length settings
-export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
-export RESPONSE_LEN="${RESPONSE_LEN:-7680}"
-export PACK_LEN="${PACK_LEN:-8192}"
 
 # Multi-node layout defaults (one learner node; vLLM uses remaining nodes)
 export NUM_LEARNERS_PER_NODE="${NUM_LEARNERS_PER_NODE:-4}"
-export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-4}"
+export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-8}"
 export VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-1}"
 # Enable eager if you see vLLM issues across nodes (slower but safer).
 export VLLM_ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-False}"
@@ -410,7 +330,6 @@ hours=$(date -d @"$now" -u +%H)
 minutes=$(date -d @"$now" -u +%M)
 seconds=$(date -d @"$now" -u +%S)
 
-name="qwen25_7b_mn"
 export EXP_NAME="${EXP_NAME:-${name}_}"
 
 bash /home/rberger/rlvr/GRPO_prompt_replay/open-instruct/scripts/train/olmo3/qwen_math_7_multinode.sh "$@"

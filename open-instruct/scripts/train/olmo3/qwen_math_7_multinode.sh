@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPEN_INSTRUCT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 REPO_ROOT="$(cd "${OPEN_INSTRUCT_ROOT}/.." && pwd)"
 
-MODEL_NAME_OR_PATH="${MODEL_NAME_OR_PATH:-deepseek-ai/DeepSeek-R1-Distill-Qwen-7B}"
-GS_MODEL_NAME="${GS_MODEL_NAME:-r1distill_qwen25_math_7b}"
+MODEL_NAME_OR_PATH="${MODEL_NAME_OR_PATH:-Qwen/Qwen2.5-Math-7B}"
+GS_MODEL_NAME="${GS_MODEL_NAME:-qwen25-math-7b}"
 
 # Qwen2.5 Math 7B supports ~4k context; cap lengths accordingly.
 MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-1024}"
@@ -20,7 +20,8 @@ PACK_LEN="${PACK_LEN:-3072}"
 DATASETS="${DATASETS:-ai2-adapt-dev/rlvr_open_reasoner_math 2000}"
 EVALS="${EVALS:-aime:zs_cot_r1::pass_at_32_2024_dapo,aime:zs_cot_r1::pass_at_32_2025_dapo}"
 LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-128}"
-LOCAL_EVAL_TIMEOUT="${LOCAL_EVAL_TIMEOUT:-300}"
+LOCAL_EVAL_TIMEOUT="${LOCAL_EVAL_TIMEOUT:-500}"
+EVAL_ON_STEP_0="${EVAL_ON_STEP_0:-True}"
 
 # All benchmarks including new ones
 BENCHMARK_EVALS="HuggingFaceH4/MATH-500 1.0 math-ai/minervamath 1.0 math-ai/amc23 1.0 mnoukhov/aime2024-25-rlvr 1.0 mnoukhov/aime2024-25-rlvr 1.0 Hothan/OlympiadBench:OE_TO_maths_en_COMP 1.0"
@@ -45,7 +46,7 @@ ZERO_PASS_CURRICULUM_FRACTION="${ZERO_PASS_CURRICULUM_FRACTION:-0.25}"
 PROMPT_PASS_CURRICULUM_05SORT="${PROMPT_PASS_CURRICULUM_05SORT:-False}"
 
 # when to discard a prompt from the dataset
-NO_RESAMPLING_PASS_RATE="${NO_RESAMPLING_PASS_RATE:-0.85}"
+NO_RESAMPLING_PASS_RATE="${NO_RESAMPLING_PASS_RATE:-0.9}"
 
 SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch-shared/rberber/rlvr}"
 mkdir -p "${SCRATCH_ROOT}"
@@ -101,12 +102,12 @@ fi
 uv run python open_instruct/grpo_fast.py \
     --exp_name "${EXP_NAME}" \
     --beta 0.0 \
-    --async_steps 2 \
+    --async_steps 4 \
     --inflight_updates \
     --truncated_importance_sampling_ratio_cap 2.0 \
     --advantage_normalization_type centered \
     --active_sampling \
-    --no_resampling_pass_rate "${NO_RESAMPLING_PASS_RATE}" \
+    --no_resampling_pass_rate ${NO_RESAMPLING_PASS_RATE} \
     --num_samples_per_prompt_rollout 16 \
     --num_unique_prompts_rollout 32 \
     --num_mini_batches 1 \
@@ -125,11 +126,11 @@ uv run python open_instruct/grpo_fast.py \
     --response_length "${RESPONSE_LEN}" \
     --pack_length "${PACK_LEN}" \
     --model_name_or_path "${MODEL_NAME_OR_PATH}" \
-    --chat_template_name olmo_thinker_dapo \
+    --chat_template_name olmo_thinker \
     --non_stop_penalty False \
     --temperature 1.0 \
     --total_episodes 1000000 \
-    --deepspeed_stage 2 \
+    --deepspeed_stage 3 \
     --num_learners_per_node ${NUM_LEARNERS_PER_NODE} \
     --vllm_num_engines "${VLLM_NUM_ENGINES}" \
     --vllm_tensor_parallel_size "${VLLM_TENSOR_PARALLEL_SIZE}" \
@@ -139,8 +140,8 @@ uv run python open_instruct/grpo_fast.py \
     --record_entropy true \
     --seed ${seed} \
     --local_eval_every 40 \
-    --save_freq 150 \
-    --checkpoint_state_freq 150 \
+    --save_freq 100 \
+    --checkpoint_state_freq 100 \
     --checkpoint_state_dir "${CHECKPOINT_STATE_DIR}" \
     --gradient_checkpointing \
     --vllm_enable_prefix_caching \
@@ -148,7 +149,7 @@ uv run python open_instruct/grpo_fast.py \
     --mask_truncated_completions True \
     --with_tracking \
     --wandb_project_name "final_runs" \
-    --eval_on_step_0 False \
+    --eval_on_step_0 "${EVAL_ON_STEP_0}" \
     --output_dir "${OUTPUT_DIR}" \
     --prompt_pass_table_dir "${OPEN_INSTRUCT_ROOT}/UC" \
     --enable_prompt_replay "${ENABLE_PROMPT_REPLAY}" \
