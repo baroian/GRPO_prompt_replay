@@ -209,6 +209,8 @@ class Args:
     """Minimum pass rate (inclusive) required for a prompt to enter replay. Set to a negative value to disable the lower bound."""
     prompt_replay_max_pass_rate: float = 0.7
     """Maximum pass rate (inclusive) allowed for a prompt to enter replay. Set to a negative value to disable the upper bound."""
+    px_dependent_cooldown_steps: bool = False
+    """If True, cooldown steps depend on pass rate distance from 0.5. If False, use fixed prompt_replay_cooldown_steps."""
 
     # Experiment
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
@@ -710,6 +712,7 @@ class ShufflingIterator:
         prompt_replay_max_reuse_time: int = 5,
         prompt_replay_min_pass_rate: float | None = 0.24,
         prompt_replay_max_pass_rate: float | None = 0.7,
+        px_dependent_cooldown_steps: bool = False,
     ):
         self.base_data = data.copy()
         self.batch_size = batch_size
@@ -734,6 +737,7 @@ class ShufflingIterator:
         self.prompt_stats_enabled = self.curriculum_enabled or self.replay_enabled
         self.replay_fraction = min(max(prompt_replay_fraction, 0.0), 0.5)
         self.replay_cooldown_steps = max(0, int(prompt_replay_cooldown_steps))
+        self.px_dependent_cooldown_steps = px_dependent_cooldown_steps
         if prompt_replay_max_reuse_time is None:
             self.replay_max_reuse_limit = None
         else:
@@ -898,13 +902,15 @@ class ShufflingIterator:
                 # Drop prompts that have exhausted their reuse budget.
                 continue
             scheduled_step = target_step
-            # to introduce random add offset + - 20% of the cooldown steps
-            offset = max(1, int(round(self.replay_cooldown_steps * 0.2)))
+            # Get cooldown based on pass rate if px_dependent enabled, else use fixed cooldown
+            base_cooldown = self._get_cooldown_for_pass_rate(rate) if rate is not None else self.replay_cooldown_steps
+            # Introduce random offset +/- 20% of the cooldown steps
+            offset = max(1, int(round(base_cooldown * 0.2)))
             offseted_cooldown_steps = self.rng.integers(
-                max(1, self.replay_cooldown_steps - offset), self.replay_cooldown_steps + offset + 1
+                max(1, base_cooldown - offset), base_cooldown + offset + 1
             )
             cooldown_ready_step = (
-                target_step + offseted_cooldown_steps if self.replay_cooldown_steps > 0 else target_step
+                target_step + offseted_cooldown_steps if base_cooldown > 0 else target_step
             )
             candidate = (dataset_index, scheduled_step, cooldown_ready_step)
             break
@@ -920,6 +926,31 @@ class ShufflingIterator:
         if last_step is None:
             return True
         return (target_step - last_step) >= self.replay_cooldown_steps
+
+    def _get_cooldown_for_pass_rate(self, pass_rate: float) -> int:
+        """Return cooldown steps based on pass rate distance from 0.5.
+
+        Pass rate is rounded to nearest 0.1 before computing distance.
+        - Distance 0 (px ~0.5) -> 2 steps
+        - Distance 0.1 (px ~0.4 or 0.6) -> 4 steps
+        - Distance 0.2 (px ~0.3 or 0.7) -> 6 steps
+        - Distance >= 0.3 -> 8 steps
+        """
+        if not self.px_dependent_cooldown_steps:
+            return self.replay_cooldown_steps
+
+        # Round to nearest 0.1
+        rounded_rate = round(pass_rate, 1)
+        distance = abs(rounded_rate - 0.5)
+
+        if distance <= 0.05:  # Effectively 0 after rounding
+            return 2
+        elif distance <= 0.15:  # 0.1 distance
+            return 4
+        elif distance <= 0.25:  # 0.2 distance
+            return 6
+        else:  # 0.3+ distance
+            return 8
 
     def _is_prompt_within_reuse_window(self, dataset_index: int, target_step: int) -> bool:
         if self.replay_max_reuse_limit is None:
@@ -3713,7 +3744,7 @@ def maybe_evaluate(
         eval_stop_rate = sum(int(finish_reason == "stop") for finish_reason in eval_result.finish_reasons) / len(
             eval_result.finish_reasons
         )
-        eval_reward_metrics = {f"eval/{key}": val for key, val in eval_reward_metrics.items()}
+        eval_reward_metrics = {f"eval/{key}": val for key, val in eval_reward_metrics.items() if not key.startswith("GPUs/")}
         eval_metrics = {
             "eval/scores": np.array(eval_batch.scores).mean(),
             "eval/sequence_lengths": eval_sequence_lengths.mean(),
@@ -3812,7 +3843,7 @@ def maybe_evaluate_benchmark(
         benchmark_stop_rate = sum(
             int(finish_reason == "stop") for finish_reason in benchmark_result.finish_reasons
         ) / len(benchmark_result.finish_reasons)
-        benchmark_reward_metrics = {f"benchmark/{key}": val for key, val in benchmark_reward_metrics.items()}
+        benchmark_reward_metrics = {f"benchmark/{key}": val for key, val in benchmark_reward_metrics.items() if not key.startswith("GPUs/")}
 
         # Compute overall (averaged) benchmark metrics
         benchmark_metrics = {
@@ -4579,6 +4610,7 @@ def main(args: Args, tc: TokenizerConfig, model_config: ModelConfig):
         prompt_replay_max_reuse_time=args.prompt_replay_max_reuse_time,
         prompt_replay_min_pass_rate=args.prompt_replay_min_pass_rate,
         prompt_replay_max_pass_rate=args.prompt_replay_max_pass_rate,
+        px_dependent_cooldown_steps=args.px_dependent_cooldown_steps,
     )
 
     if checkpoint_state and "shuffling_iterator_state" in checkpoint_state:

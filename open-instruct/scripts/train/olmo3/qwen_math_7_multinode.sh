@@ -158,6 +158,7 @@ uv run python open_instruct/grpo_fast.py \
     --prompt_replay_max_reuse_time "${PROMPT_REPLAY_MAX_REUSE_TIME}" \
     --prompt_replay_min_pass_rate "${PROMPT_REPLAY_MIN_PASS_RATE}" \
     --prompt_replay_max_pass_rate "${PROMPT_REPLAY_MAX_PASS_RATE}" \
+    --px_dependent_cooldown_steps "${PX_DEPENDENT_COOLDOWN_STEPS:-False}" \
     --enable_prompt_pass_curriculum "${ENABLE_PROMPT_PASS_CURRICULUM}" \
     --zero_pass_curriculum_fraction "${ZERO_PASS_CURRICULUM_FRACTION}" \
     --prompt_pass_curriculum_05sort "${PROMPT_PASS_CURRICULUM_05SORT}" \

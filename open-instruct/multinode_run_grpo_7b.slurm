@@ -270,24 +270,24 @@ print_ray_status
 # ================== RUNCONFIG ==================
 #############################################
 
-name="baseline_olmo_dolci"
+name="promptreplay_qwen7b_dolci"
 
 ### OLMO config 
-export MODEL_NAME_OR_PATH="allenai/Olmo-3-1025-7B"
-export GS_MODEL_NAME="olmo3-1025-7b"
+#export MODEL_NAME_OR_PATH="allenai/Olmo-3-1025-7B"
+#export GS_MODEL_NAME="olmo3-1025-7b"
 
-export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-1024}"
-export RESPONSE_LEN="${RESPONSE_LEN:-7168}"
-export PACK_LEN="${PACK_LEN:-8192}"
+#export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-1024}"
+#export RESPONSE_LEN="${RESPONSE_LEN:-7168}"
+#export PACK_LEN="${PACK_LEN:-8192}"
 
 ### QWEN config 
 
-#export MODEL_NAME_OR_PATH="Qwen/Qwen2.5-Math-7B"
-#export GS_MODEL_NAME="qwen25-math-7b"
+export MODEL_NAME_OR_PATH="Qwen/Qwen2.5-Math-7B"
+export GS_MODEL_NAME="qwen25-math-7b"
 
-#export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
-#export RESPONSE_LEN="${RESPONSE_LEN:-3584}"
-#export PACK_LEN="${PACK_LEN:-4096}"
+export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
+export RESPONSE_LEN="${RESPONSE_LEN:-3584}"
+export PACK_LEN="${PACK_LEN:-4096}"
 
 
 
@@ -299,12 +299,13 @@ export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-256}"
 export EVAL_ON_STEP_0="${EVAL_ON_STEP_0:-True}"
 
 # Prompt replay settings
-export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
+export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-True}"
 export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.9}"
 export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-5}"
 export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-15}"
 export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.01}"
 export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.9}"
+export PX_DEPENDENT_COOLDOWN_STEPS="${PX_DEPENDENT_COOLDOWN_STEPS:-False}"
 
 # Prompt pass curriculum settings
 export ENABLE_PROMPT_PASS_CURRICULUM="${ENABLE_PROMPT_PASS_CURRICULUM:-False}"
