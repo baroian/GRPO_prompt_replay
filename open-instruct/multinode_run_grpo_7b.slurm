@@ -1,16 +1,15 @@
 #!/bin/bash
 
 #SBATCH --job-name=olmo    # Name of your job
-#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/olmo/grpo_7b_mn_%j.out  # Standard output and error log (%j expands to jobId)
+#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/olmo/grpo_7b_mn_%j_baseline.out  # Standard output and error log (%j expands to jobId)
 #SBATCH --partition=gpu_h100           # Partition (queue)
 #SBATCH --gres=gpu:h100:4              # Request N H100 GPU per node
-#SBATCH --time=24:00:00                # Time limit (HH:MM:SS)
-#SBATCH --nodes=3                      # Number of nodes
+#SBATCH --time=10:00:00                # Time limit (HH:MM:SS)
+#SBATCH --nodes=2                      # Number of nodes
 #SBATCH --ntasks-per-node=1            # One Ray daemon per node
 
 set -euo pipefail
 
-name="qwen_7b_dolci"
 
 #############################################
 # ================== SETUP ==================
@@ -148,9 +147,10 @@ if [[ -z "${NCCL_SOCKET_IFNAME:-}" && -n "${RAY_INTERFACE}" ]]; then
     export NCCL_SOCKET_IFNAME="${RAY_INTERFACE}"
 fi
 
+
+export RAY_DEBUG=0
 # Source Ray debugging utilities
 source /home/rberger/rlvr/GRPO_prompt_replay/open-instruct/scripts/ray_debug.sh
-
 # Print debug info (set RAY_DEBUG=0 to skip)
 if [[ "${RAY_DEBUG:-1}" == "1" ]]; then
     print_ray_debug_info "${nodes[@]}"
@@ -270,24 +270,27 @@ print_ray_status
 # ================== RUNCONFIG ==================
 #############################################
 
-name="promptreplay_qwen7b_dolci"
+name="baseline_qwen3_8b_dolci"
 
 ### OLMO config 
 #export MODEL_NAME_OR_PATH="allenai/Olmo-3-1025-7B"
 #export GS_MODEL_NAME="olmo3-1025-7b"
 
-#export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-1024}"
-#export RESPONSE_LEN="${RESPONSE_LEN:-7168}"
-#export PACK_LEN="${PACK_LEN:-8192}"
+export MODEL_NAME_OR_PATH="Qwen/Qwen3-8B-Base"
+export GS_MODEL_NAME="qwen3-8b-base"
+
+export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-1024}"
+export RESPONSE_LEN="${RESPONSE_LEN:-7168}"
+export PACK_LEN="${PACK_LEN:-8192}"
 
 ### QWEN config 
 
-export MODEL_NAME_OR_PATH="Qwen/Qwen2.5-Math-7B"
-export GS_MODEL_NAME="qwen25-math-7b"
+#export MODEL_NAME_OR_PATH="Qwen/Qwen2.5-Math-7B"
+#export GS_MODEL_NAME="qwen25-math-7b"
 
-export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
-export RESPONSE_LEN="${RESPONSE_LEN:-3584}"
-export PACK_LEN="${PACK_LEN:-4096}"
+#export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-512}"
+#export RESPONSE_LEN="${RESPONSE_LEN:-3584}"
+#export PACK_LEN="${PACK_LEN:-4096}"
 
 
 
@@ -299,13 +302,17 @@ export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-256}"
 export EVAL_ON_STEP_0="${EVAL_ON_STEP_0:-True}"
 
 # Prompt replay settings
-export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-True}"
+export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
 export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.9}"
 export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-5}"
 export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-15}"
 export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.01}"
 export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.9}"
-export PX_DEPENDENT_COOLDOWN_STEPS="${PX_DEPENDENT_COOLDOWN_STEPS:-False}"
+export PX_DEPENDENT_COOLDOWN_STEPS="${PX_DEPENDENT_COOLDOWN_STEPS:-True}"
+export PX_COOLDOWN_DIST_0="${PX_COOLDOWN_DIST_0:-5}"
+export PX_COOLDOWN_DIST_1="${PX_COOLDOWN_DIST_1:-10}"
+export PX_COOLDOWN_DIST_2="${PX_COOLDOWN_DIST_2:-15}"
+export PX_COOLDOWN_DIST_3="${PX_COOLDOWN_DIST_3:-20}"
 
 # Prompt pass curriculum settings
 export ENABLE_PROMPT_PASS_CURRICULUM="${ENABLE_PROMPT_PASS_CURRICULUM:-False}"
@@ -320,7 +327,7 @@ export NO_RESAMPLING_PASS_RATE="${NO_RESAMPLING_PASS_RATE:-0.9}"
 
 # Multi-node layout defaults (one learner node; vLLM uses remaining nodes)
 export NUM_LEARNERS_PER_NODE="${NUM_LEARNERS_PER_NODE:-4}"
-export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-8}"
+export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-4}"
 export VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-1}"
 # Enable eager if you see vLLM issues across nodes (slower but safer).
 export VLLM_ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-False}"

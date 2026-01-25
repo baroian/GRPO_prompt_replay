@@ -129,7 +129,7 @@ uv run python open_instruct/grpo_fast.py \
     --chat_template_name olmo_thinker \
     --non_stop_penalty False \
     --temperature 1.0 \
-    --total_episodes 1000000 \
+    --total_episodes 5000000 \
     --deepspeed_stage 3 \
     --num_learners_per_node ${NUM_LEARNERS_PER_NODE} \
     --vllm_num_engines "${VLLM_NUM_ENGINES}" \
@@ -159,6 +159,10 @@ uv run python open_instruct/grpo_fast.py \
     --prompt_replay_min_pass_rate "${PROMPT_REPLAY_MIN_PASS_RATE}" \
     --prompt_replay_max_pass_rate "${PROMPT_REPLAY_MAX_PASS_RATE}" \
     --px_dependent_cooldown_steps "${PX_DEPENDENT_COOLDOWN_STEPS:-False}" \
+    --px_cooldown_dist_0 "${PX_COOLDOWN_DIST_0:-5}" \
+    --px_cooldown_dist_1 "${PX_COOLDOWN_DIST_1:-10}" \
+    --px_cooldown_dist_2 "${PX_COOLDOWN_DIST_2:-15}" \
+    --px_cooldown_dist_3 "${PX_COOLDOWN_DIST_3:-20}" \
     --enable_prompt_pass_curriculum "${ENABLE_PROMPT_PASS_CURRICULUM}" \
     --zero_pass_curriculum_fraction "${ZERO_PASS_CURRICULUM_FRACTION}" \
     --prompt_pass_curriculum_05sort "${PROMPT_PASS_CURRICULUM_05SORT}" \

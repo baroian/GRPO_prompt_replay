@@ -211,6 +211,14 @@ class Args:
     """Maximum pass rate (inclusive) allowed for a prompt to enter replay. Set to a negative value to disable the upper bound."""
     px_dependent_cooldown_steps: bool = False
     """If True, cooldown steps depend on pass rate distance from 0.5. If False, use fixed prompt_replay_cooldown_steps."""
+    px_cooldown_dist_0: int = 5
+    """Cooldown steps when pass rate distance from 0.5 is ~0 (px ~0.5)."""
+    px_cooldown_dist_1: int = 10
+    """Cooldown steps when pass rate distance from 0.5 is ~0.1 (px ~0.4 or 0.6)."""
+    px_cooldown_dist_2: int = 15
+    """Cooldown steps when pass rate distance from 0.5 is ~0.2 (px ~0.3 or 0.7)."""
+    px_cooldown_dist_3: int = 20
+    """Cooldown steps when pass rate distance from 0.5 is >= 0.3."""
 
     # Experiment
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
@@ -713,6 +721,10 @@ class ShufflingIterator:
         prompt_replay_min_pass_rate: float | None = 0.24,
         prompt_replay_max_pass_rate: float | None = 0.7,
         px_dependent_cooldown_steps: bool = False,
+        px_cooldown_dist_0: int = 5,
+        px_cooldown_dist_1: int = 10,
+        px_cooldown_dist_2: int = 15,
+        px_cooldown_dist_3: int = 20,
     ):
         self.base_data = data.copy()
         self.batch_size = batch_size
@@ -738,6 +750,10 @@ class ShufflingIterator:
         self.replay_fraction = min(max(prompt_replay_fraction, 0.0), 0.5)
         self.replay_cooldown_steps = max(0, int(prompt_replay_cooldown_steps))
         self.px_dependent_cooldown_steps = px_dependent_cooldown_steps
+        self.px_cooldown_dist_0 = px_cooldown_dist_0
+        self.px_cooldown_dist_1 = px_cooldown_dist_1
+        self.px_cooldown_dist_2 = px_cooldown_dist_2
+        self.px_cooldown_dist_3 = px_cooldown_dist_3
         if prompt_replay_max_reuse_time is None:
             self.replay_max_reuse_limit = None
         else:
@@ -931,10 +947,10 @@ class ShufflingIterator:
         """Return cooldown steps based on pass rate distance from 0.5.
 
         Pass rate is rounded to nearest 0.1 before computing distance.
-        - Distance 0 (px ~0.5) -> 2 steps
-        - Distance 0.1 (px ~0.4 or 0.6) -> 4 steps
-        - Distance 0.2 (px ~0.3 or 0.7) -> 6 steps
-        - Distance >= 0.3 -> 8 steps
+        - Distance 0 (px ~0.5) -> px_cooldown_dist_0 steps
+        - Distance 0.1 (px ~0.4 or 0.6) -> px_cooldown_dist_1 steps
+        - Distance 0.2 (px ~0.3 or 0.7) -> px_cooldown_dist_2 steps
+        - Distance >= 0.3 -> px_cooldown_dist_3 steps
         """
         if not self.px_dependent_cooldown_steps:
             return self.replay_cooldown_steps
@@ -944,13 +960,13 @@ class ShufflingIterator:
         distance = abs(rounded_rate - 0.5)
 
         if distance <= 0.05:  # Effectively 0 after rounding
-            return 2
+            return self.px_cooldown_dist_0
         elif distance <= 0.15:  # 0.1 distance
-            return 4
+            return self.px_cooldown_dist_1
         elif distance <= 0.25:  # 0.2 distance
-            return 6
+            return self.px_cooldown_dist_2
         else:  # 0.3+ distance
-            return 8
+            return self.px_cooldown_dist_3
 
     def _is_prompt_within_reuse_window(self, dataset_index: int, target_step: int) -> bool:
         if self.replay_max_reuse_limit is None:
@@ -3134,33 +3150,21 @@ def _distribute_counts(weights: list[float], total_count: int) -> list[int]:
 
 
 def maybe_configure_local_eval_subset(args: Args):
-    """Override eval dataset mix using a subset of the training datasets."""
+    """Configure local eval holdout from training data.
+
+    When local_eval_subset_sample_count > 0, we use index-based splitting in setup_datasets()
+    to hold out the first N samples for eval. This ensures eval samples are never used for training.
+
+    This function now only logs the intent - actual splitting happens in setup_datasets().
+    """
     if args.local_eval_subset_sample_count <= 0:
         return
 
-    dataset_pairs = _parse_dataset_mixer_pairs(args.dataset_mixer_list)
-    weights = [weight for _, weight in dataset_pairs]
-    counts = _distribute_counts(weights, args.local_eval_subset_sample_count)
-
-    eval_list: list[str] = []
-    for (dataset_name, _), count in zip(dataset_pairs, counts):
-        if count <= 0:
-            continue
-        eval_list.extend([dataset_name, str(count)])
-
-    if not eval_list:
-        raise ValueError(
-            "Derived local eval subset is empty. Increase local_eval_subset_sample_count or check dataset mix."
-        )
-
-    args.dataset_mixer_eval_list = eval_list
-    # eval_list contains (name, count) pairs, so num_datasets = len // 2
-    args.dataset_mixer_eval_list_splits = ["train"] * (len(eval_list) // 2)
-
+    # Don't set dataset_mixer_eval_list - we'll do holdout-based splitting in setup_datasets()
+    # This ensures eval samples are properly excluded from training
     logger.info(
-        "Configured local eval subset using %d prompts across %d training datasets",
+        "Local eval holdout enabled: will reserve first %d samples for eval (excluded from training)",
         args.local_eval_subset_sample_count,
-        len(eval_list) // 2,
     )
 
 
@@ -3190,10 +3194,32 @@ def setup_datasets(args: Args, tc: TokenizerConfig, tokenizer: PreTrainedTokeniz
         dataset_skip_cache=args.dataset_skip_cache,
         system_prompt_override=system_prompt_override,
     )
+
+    # Holdout-based train/eval split: reserve first N samples for eval BEFORE shuffling
+    # This ensures eval samples are never used for training
+    eval_dataset = None
+    if args.local_eval_subset_sample_count > 0:
+        holdout_count = min(args.local_eval_subset_sample_count, len(train_dataset))
+        if holdout_count < args.local_eval_subset_sample_count:
+            logger.warning(
+                "Requested %d eval samples but dataset only has %d samples. Using %d for eval.",
+                args.local_eval_subset_sample_count,
+                len(train_dataset),
+                holdout_count,
+            )
+        logger.info(
+            "Splitting dataset: first %d samples for eval, remaining %d for training (total: %d)",
+            holdout_count,
+            len(train_dataset) - holdout_count,
+            len(train_dataset),
+        )
+        eval_dataset = train_dataset.select(range(holdout_count))
+        train_dataset = train_dataset.select(range(holdout_count, len(train_dataset)))
+
     train_dataset = train_dataset.shuffle(seed=args.seed)
 
-    eval_dataset = None
-    if len(args.dataset_mixer_eval_list) > 0:
+    # Load separate eval dataset only if explicitly configured (and not using holdout)
+    if eval_dataset is None and len(args.dataset_mixer_eval_list) > 0:
         eval_dataset = get_cached_dataset_tulu(
             dataset_mixer_list=args.dataset_mixer_eval_list,
             dataset_mixer_list_splits=args.dataset_mixer_eval_list_splits,
@@ -4611,6 +4637,10 @@ def main(args: Args, tc: TokenizerConfig, model_config: ModelConfig):
         prompt_replay_min_pass_rate=args.prompt_replay_min_pass_rate,
         prompt_replay_max_pass_rate=args.prompt_replay_max_pass_rate,
         px_dependent_cooldown_steps=args.px_dependent_cooldown_steps,
+        px_cooldown_dist_0=args.px_cooldown_dist_0,
+        px_cooldown_dist_1=args.px_cooldown_dist_1,
+        px_cooldown_dist_2=args.px_cooldown_dist_2,
+        px_cooldown_dist_3=args.px_cooldown_dist_3,
     )
 
     if checkpoint_state and "shuffling_iterator_state" in checkpoint_state:

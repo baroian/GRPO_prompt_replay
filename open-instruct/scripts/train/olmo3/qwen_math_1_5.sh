@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPEN_INSTRUCT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 REPO_ROOT="$(cd "${OPEN_INSTRUCT_ROOT}/.." && pwd)"
 
-MODEL_NAME_OR_PATH="${MODEL_NAME_OR_PATH:-deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B}"
-GS_MODEL_NAME="${GS_MODEL_NAME:-r1distill_qwen25_math_1_5b}"
+MODEL_NAME_OR_PATH="${MODEL_NAME_OR_PATH:-Qwen/Qwen3-1.7B-Base}"
+GS_MODEL_NAME="${GS_MODEL_NAME:-qwen3-1.7b-base}"
 #MODEL_NAME_OR_PATH="allenai/Olmo-3-1025-7B"
 #GS_MODEL_NAME="olmo3-1025-7b"
 
@@ -122,16 +122,18 @@ fi
 #MODEL_NAME_OR_PATH="/scratch-shared/rberber/rlvr/outputs/qwen25-math-rlzero-math/checkpoints/prompt_replay_5cooldown___123__1769199032_checkpoints/step_750"
 #CHECKPOINT_STATE_DIR="/scratch-shared/rberber/rlvr/outputs/qwen25-math-rlzero-math/checkpoints/state_20260123_211005"
 
+#    --async_steps 2 \
+#    --active_sampling \ ## VEYR IMPORTAANT TO INCLUDE BACK
 
 # shellcheck disable=SC2086
 uv run python open_instruct/grpo_fast.py \
     --exp_name "${EXP_NAME}" \
     --beta 0.0 \
     --async_steps 2 \
+    --active_sampling \
     --inflight_updates \
     --truncated_importance_sampling_ratio_cap 2.0 \
     --advantage_normalization_type centered \
-    --active_sampling \
     --no_resampling_pass_rate $NO_RESAMPLING_PASS_RATE \
     --num_samples_per_prompt_rollout 16 \
     --num_unique_prompts_rollout 32 \
@@ -154,10 +156,10 @@ uv run python open_instruct/grpo_fast.py \
     --chat_template_name olmo_thinker_dapo \
     --non_stop_penalty False \
     --temperature 1.0 \
-    --total_episodes 1000000 \
+    --total_episodes 5000000 \
     --deepspeed_stage 2 \
-    --num_learners_per_node 2 \
-    --vllm_num_engines 2\
+    --num_learners_per_node 1 \
+    --vllm_num_engines 3\
     --vllm_tensor_parallel_size 1 \
     --lr_scheduler_type constant \
     --apply_verifiable_reward true \
@@ -182,7 +184,11 @@ uv run python open_instruct/grpo_fast.py \
     --prompt_replay_max_reuse_time "${PROMPT_REPLAY_MAX_REUSE_TIME}" \
     --prompt_replay_min_pass_rate "${PROMPT_REPLAY_MIN_PASS_RATE}" \
     --prompt_replay_max_pass_rate "${PROMPT_REPLAY_MAX_PASS_RATE}" \
-    --px_dependent_cooldown_steps "${PX_DEPENDENT_COOLDOWN_STEPS:-False}" \
+    --px_dependent_cooldown_steps "${PX_DEPENDENT_COOLDOWN_STEPS:-True}" \
+    --px_cooldown_dist_0 "${PX_COOLDOWN_DIST_0:-5}" \
+    --px_cooldown_dist_1 "${PX_COOLDOWN_DIST_1:-10}" \
+    --px_cooldown_dist_2 "${PX_COOLDOWN_DIST_2:-15}" \
+    --px_cooldown_dist_3 "${PX_COOLDOWN_DIST_3:-20}" \
     --enable_prompt_pass_curriculum "${ENABLE_PROMPT_PASS_CURRICULUM}" \
     --zero_pass_curriculum_fraction "${ZERO_PASS_CURRICULUM_FRACTION}" \
     --prompt_pass_curriculum_05sort "${PROMPT_PASS_CURRICULUM_05SORT}" \
