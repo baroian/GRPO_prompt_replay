@@ -1,6 +1,6 @@
 # Prompt Replay
 
-![Prompt Replay](prompt_replay.png)
+![Prompt Replay](prompt replay.png)
 
 This repository contains code for Prompt replay projects. **Note: This codebase is unclean.**
 
