@@ -32,6 +32,10 @@ BENCHMARK_EVAL_SPLITS="${BENCHMARK_EVAL_SPLITS:-test test train}"
 BENCHMARK_EVAL_EVERY="${BENCHMARK_EVAL_EVERY:-}"
 BENCHMARK_TRANSFORM_FN="${BENCHMARK_TRANSFORM_FN:-auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1}"
 
+# Transform functions for training datasets
+# Default includes auto_convert_benchmark_format which handles both RLVR and non-RLVR datasets
+DATASET_TRANSFORM_FN="${DATASET_TRANSFORM_FN:-auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1}"
+
 # Prompt replay settings
 ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
 PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.5}"
@@ -86,6 +90,7 @@ echo "[info] Local eval subset sample count: ${LOCAL_EVAL_SAMPLE_COUNT}"
 echo "[info] Benchmark dataset: ${BENCHMARK_EVALS}"
 echo "[info] Benchmark splits: ${BENCHMARK_EVAL_SPLITS}"
 echo "[info] Benchmark transform: ${BENCHMARK_TRANSFORM_FN}"
+echo "[info] Training transform: ${DATASET_TRANSFORM_FN}"
 echo "[info] NUM_LEARNERS_PER_NODE: ${NUM_LEARNERS_PER_NODE}"
 echo "[info] VLLM_NUM_ENGINES: ${VLLM_NUM_ENGINES}"
 
@@ -116,6 +121,7 @@ uv run python open_instruct/grpo_fast.py \
     --kl_estimator kl3 \
     --dataset_mixer_list ${DATASETS} \
     --dataset_mixer_list_splits train \
+    --dataset_transform_fn ${DATASET_TRANSFORM_FN} \
     --local_eval_subset_sample_count "${LOCAL_EVAL_SAMPLE_COUNT}" \
     --local_eval_timeout "${LOCAL_EVAL_TIMEOUT}" \
     --dataset_mixer_benchmark_list ${BENCHMARK_EVALS} \
@@ -139,9 +145,9 @@ uv run python open_instruct/grpo_fast.py \
     --apply_verifiable_reward true \
     --record_entropy true \
     --seed ${seed} \
-    --local_eval_every 40 \
-    --save_freq 100 \
-    --checkpoint_state_freq 100 \
+    --local_eval_every 30 \
+    --save_freq 50 \
+    --checkpoint_state_freq 50 \
     --checkpoint_state_dir "${CHECKPOINT_STATE_DIR}" \
     --gradient_checkpointing \
     --vllm_enable_prefix_caching \

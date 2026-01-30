@@ -52,8 +52,8 @@ LOCAL_EVAL_TIMEOUT="${LOCAL_EVAL_TIMEOUT:-300}"
 
 
 # All benchmarks including new ones
-BENCHMARK_EVALS="HuggingFaceH4/MATH-500 1.0 math-ai/minervamath 1.0 math-ai/amc23 1.0 mnoukhov/aime2024-25-rlvr 1.0 mnoukhov/aime2024-25-rlvr 1.0 Hothan/OlympiadBench:OE_TO_maths_en_COMP 1.0"
-BENCHMARK_EVAL_SPLITS="test test test test_2024 test_2025 train"
+BENCHMARK_EVALS="HuggingFaceH4/MATH-500 1.0 math-ai/minervamath 1.0 Hothan/OlympiadBench:OE_TO_maths_en_COMP 1.0"
+BENCHMARK_EVAL_SPLITS="test test train"
 
 BENCHMARK_EVALS="${BENCHMARK_EVALS:-HuggingFaceH4/MATH-500 100 math-ai/minervamath 100 Hothan/OlympiadBench:OE_TO_maths_en_COMP 100}"
 BENCHMARK_EVAL_SPLITS="${BENCHMARK_EVAL_SPLITS:-test test train}"
@@ -65,6 +65,11 @@ BENCHMARK_EVAL_EVERY="${BENCHMARK_EVAL_EVERY:-}"  # Empty means use local_eval_e
 # This auto-detects column formats (problem/question, answer/final_answer) and handles them correctly
 BENCHMARK_TRANSFORM_FN="${BENCHMARK_TRANSFORM_FN:-auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1}"
 
+# Transform functions for training datasets
+# Default includes auto_convert_benchmark_format which handles both RLVR and non-RLVR datasets:
+# - RLVR datasets (messages/ground_truth): passes through unchanged
+# - Non-RLVR datasets (problem/answer, question/answer): converts to RLVR format
+DATASET_TRANSFORM_FN="${DATASET_TRANSFORM_FN:-auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1}"
 
 # Prompt replay settings
 ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
@@ -105,6 +110,7 @@ echo "[info] Local eval subset sample count: ${LOCAL_EVAL_SAMPLE_COUNT}"
 echo "[info] Benchmark dataset: ${BENCHMARK_EVALS}"
 echo "[info] Benchmark splits: ${BENCHMARK_EVAL_SPLITS}"
 echo "[info] Benchmark transform: ${BENCHMARK_TRANSFORM_FN}"
+echo "[info] Training transform: ${DATASET_TRANSFORM_FN}"
 
 # Experiment name (set via SLURM or generate here for direct execution)
 if [[ -z "${EXP_NAME:-}" ]]; then
@@ -136,13 +142,14 @@ uv run python open_instruct/grpo_fast.py \
     --advantage_normalization_type centered \
     --no_resampling_pass_rate $NO_RESAMPLING_PASS_RATE \
     --num_samples_per_prompt_rollout 16 \
-    --num_unique_prompts_rollout 32 \
+    --num_unique_prompts_rollout 48 \
     --num_mini_batches 1 \
     --learning_rate 1e-6 \
     --per_device_train_batch_size 1 \
     --kl_estimator kl3 \
     --dataset_mixer_list $DATASETS \
     --dataset_mixer_list_splits train \
+    --dataset_transform_fn $DATASET_TRANSFORM_FN \
     --local_eval_subset_sample_count "${LOCAL_EVAL_SAMPLE_COUNT}" \
     --local_eval_timeout "${LOCAL_EVAL_TIMEOUT}" \
     --dataset_mixer_benchmark_list $BENCHMARK_EVALS \
@@ -158,9 +165,9 @@ uv run python open_instruct/grpo_fast.py \
     --temperature 1.0 \
     --total_episodes 5000000 \
     --deepspeed_stage 2 \
-    --num_learners_per_node 1 \
-    --vllm_num_engines 3\
-    --vllm_tensor_parallel_size 1 \
+    --num_learners_per_node ${NUM_LEARNERS_PER_NODE:-2} \
+    --vllm_num_engines ${VLLM_NUM_ENGINES:-2} \
+    --vllm_tensor_parallel_size ${VLLM_TENSOR_PARALLEL_SIZE:-1} \
     --lr_scheduler_type constant \
     --apply_verifiable_reward true \
     --record_entropy true \

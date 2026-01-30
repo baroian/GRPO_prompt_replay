@@ -1,10 +1,10 @@
 #!/bin/bash
 
 #SBATCH --job-name=qwen3_base    # Name of your job
-#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/reports/baseline_qwen3_dolci_%j.out  # Standard output and error log (%j expands to jobId0
+#SBATCH --output=/home/rberger/rlvr/GRPO_prompt_replay/outputs/reports/baseline_qwen3_dolci_%j_1.7b_base.out  # Standard output and error log (%j expands to jobId0
 #SBATCH --partition=gpu_h100           # Partition (queue)
 #SBATCH --gres=gpu:h100:4              # Request N H100 GPU
-#SBATCH --time=10:00:00                # Time limit (HH:MM:SS)
+#SBATCH --time=12:00:00                # Time limit (HH:MM:SS)
 #SBATCH --nodes=1                      # Number of nodes
 #SBATCH --ntasks-per-node=4            # Number of tasks (processes) per node
 
@@ -92,8 +92,17 @@ export RAY_ADDRESS=local
 # ================== RUNCONFIG ==================
 #############################################
 
+
+name="baseline_Qwen3_1.7B_dolci"
+
 export MODEL_NAME_OR_PATH="Qwen/Qwen3-1.7B-Base"
 export GS_MODEL_NAME="qwen3-1.7b-base"
+
+#Qwen/Qwen3-1.7B-Base
+#meta-llama/Llama-3.2-3B-Instruct
+#Qwen/Qwen3-4B-Base
+#HuggingFaceTB/SmolLM3-3B
+
 
 
 #DATASETS="${DATASETS:-ai2-adapt-dev/rlvr_open_reasoner_math 4000}"
@@ -102,30 +111,33 @@ export GS_MODEL_NAME="qwen3-1.7b-base"
 
 #DATASETS="saurabh5/DAPO-Math-17k-Processed_filtered_olmo_completions_new_template_filtered 10000"
 
-
+#DATASETS="POLARIS-Project/Polaris-Dataset-53K 15000"
 DATASETS="allenai/Dolci-RL-Zero-Math-7B 1.0"
 #DATASETS="ai2-adapt-dev/deepscaler-gt 1.0"
 
 export DATASETS="${DATASETS}"
 
+# Transform function for training datasets - auto-converts problem/answer format to messages/ground_truth
+export DATASET_TRANSFORM_FN="${DATASET_TRANSFORM_FN:-auto_convert_benchmark_format rlvr_tokenize_v1 rlvr_max_length_filter_v1}"
+
 ### WHATOUT WERE NOT USING NOW THE LOCAL EVAL SAMPLE COUNT
 
 
 export EVALS="${EVALS:-aime:zs_cot_r1::pass_at_32_2024_dapo,aime:zs_cot_r1::pass_at_32_2025_dapo}"
-export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:256}" # FOR TESTING USE ONLY 16, 0 to disable
+export LOCAL_EVAL_SAMPLE_COUNT="${LOCAL_EVAL_SAMPLE_COUNT:-512}"
 
 # Prompt replay settings
-export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-True}"
-export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.9}"
+export ENABLE_PROMPT_REPLAY="${ENABLE_PROMPT_REPLAY:-False}"
+export PROMPT_REPLAY_FRACTION="${PROMPT_REPLAY_FRACTION:-0.5}"
 export PROMPT_REPLAY_COOLDOWN_STEPS="${PROMPT_REPLAY_COOLDOWN_STEPS:-2}"
-export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-15}"
-export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.01}"
-export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.9}"
+export PROMPT_REPLAY_MAX_REUSE_TIME="${PROMPT_REPLAY_MAX_REUSE_TIME:-10}"
+export PROMPT_REPLAY_MIN_PASS_RATE="${PROMPT_REPLAY_MIN_PASS_RATE:-0.25}"
+export PROMPT_REPLAY_MAX_PASS_RATE="${PROMPT_REPLAY_MAX_PASS_RATE:-0.75}"
 export PX_DEPENDENT_COOLDOWN_STEPS="${PX_DEPENDENT_COOLDOWN_STEPS:-True}"
-export PX_COOLDOWN_DIST_0="${PX_COOLDOWN_DIST_0:-5}"
-export PX_COOLDOWN_DIST_1="${PX_COOLDOWN_DIST_1:-10}"
-export PX_COOLDOWN_DIST_2="${PX_COOLDOWN_DIST_2:-15}"
-export PX_COOLDOWN_DIST_3="${PX_COOLDOWN_DIST_3:-20}"
+export PX_COOLDOWN_DIST_0="${PX_COOLDOWN_DIST_0:-20}"
+export PX_COOLDOWN_DIST_1="${PX_COOLDOWN_DIST_1:-25}"
+export PX_COOLDOWN_DIST_2="${PX_COOLDOWN_DIST_2:-30}"
+export PX_COOLDOWN_DIST_3="${PX_COOLDOWN_DIST_3:-40}"
 
 
 # Prompt pass curriculum settings
@@ -141,11 +153,15 @@ export NO_RESAMPLING_PASS_RATE="${NO_RESAMPLING_PASS_RATE:-0.9}"
 
 # Length settings
 export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-1024}"
-export RESPONSE_LEN="${RESPONSE_LEN:-7168}"
-export PACK_LEN="${PACK_LEN:-8192}"
+export RESPONSE_LEN="${RESPONSE_LEN:-8192}"
+export PACK_LEN="${PACK_LEN:-9216}"
 
-# VLLM num engines
-export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-1}"
+
+# Multi-node layout defaults (one learner node; vLLM uses remaining nodes)
+export NUM_LEARNERS_PER_NODE="${NUM_LEARNERS_PER_NODE:-1}"
+export VLLM_NUM_ENGINES="${VLLM_NUM_ENGINES:-3}"
+export VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-1}"
+export VLLM_ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-False}"
 
 
 
@@ -154,8 +170,6 @@ now=$(date +%s)
 hours=$(date -d @"$now" -u +%H)
 minutes=$(date -d @"$now" -u +%M)
 seconds=$(date -d @"$now" -u +%S)
-
-name="promptreplay_5101520_qwen3_dolci"
 
 export EXP_NAME="${EXP_NAME:-${name}_}"
 

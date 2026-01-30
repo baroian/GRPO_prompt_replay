@@ -2248,6 +2248,7 @@ class PromptPassEntry:
     was_reused: bool = False
     reuse_count: int | None = None
     cooldown_ready_step: int | None = None
+    included_in_batch: bool = True
 
 
 @dataclass
@@ -2347,6 +2348,118 @@ class PromptReuseLogger:
         os.makedirs(self.run_dir, exist_ok=True)
         df = pd.DataFrame(self._rows)
         df.to_csv(self.table_path, index=False)
+
+
+def _bucket_pass_rates(
+    pass_rates: list[float], num_samples_per_prompt_rollout: int
+) -> tuple[list[float], list[int], list[float]]:
+    num_buckets = max(1, int(num_samples_per_prompt_rollout))
+    counts = [0] * (num_buckets + 1)
+    for rate in pass_rates:
+        idx = int(round(float(rate) * num_buckets))
+        idx = max(0, min(num_buckets, idx))
+        counts[idx] += 1
+    total = sum(counts)
+    if total == 0:
+        percentages = [0.0] * (num_buckets + 1)
+    else:
+        percentages = [count / total for count in counts]
+    bucket_values = [idx / num_buckets for idx in range(num_buckets + 1)]
+    return bucket_values, counts, percentages
+
+
+def _compute_prompt_pass_metrics(
+    prompt_pass_entries: list[PromptPassEntry],
+    previous_pass_rates: dict[int, float] | None,
+    num_samples_per_prompt_rollout: int,
+    enable_wandb_plots: bool,
+) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    if not prompt_pass_entries:
+        return metrics
+
+    used_entries = [entry for entry in prompt_pass_entries if getattr(entry, "included_in_batch", True)]
+    if not used_entries:
+        return metrics
+
+    used_pass_rates = [float(entry.pass_rate) for entry in used_entries]
+    metrics["batch/prompt_pass_rates"] = used_pass_rates
+    metrics["batch/prompt_pass_rate_mean"] = float(np.mean(used_pass_rates))
+
+    bucket_values, _, percentages = _bucket_pass_rates(used_pass_rates, num_samples_per_prompt_rollout)
+    for bucket_value, pct in zip(bucket_values, percentages):
+        metrics[f"prompt_pass_rate/bucket_{bucket_value:.3f}"] = float(pct)
+
+    reused_entries = [entry for entry in used_entries if entry.was_reused]
+    metrics["prompt_reuse/used_count"] = len(reused_entries)
+    metrics["prompt_reuse/used_fraction"] = len(reused_entries) / len(used_entries)
+    reuse_counts = [int(entry.reuse_count or 0) for entry in used_entries]
+    metrics["prompt_reuse/reuse_count_hist"] = reuse_counts
+    if reused_entries:
+        metrics["prompt_reuse/reuse_count_mean"] = float(
+            np.mean([int(entry.reuse_count or 0) for entry in reused_entries])
+        )
+
+    if previous_pass_rates and reused_entries:
+        num_buckets = max(1, int(num_samples_per_prompt_rollout))
+        deltas: list[float] = []
+        transition_counts: dict[tuple[int, int], int] = defaultdict(int)
+        scatter_rows: list[list[float | int]] = []
+
+        for entry in reused_entries:
+            prior_rate = previous_pass_rates.get(int(entry.dataset_index))
+            if prior_rate is None:
+                continue
+            delta = float(entry.pass_rate - prior_rate)
+            deltas.append(delta)
+            prev_idx = int(round(float(prior_rate) * num_buckets))
+            prev_idx = max(0, min(num_buckets, prev_idx))
+            curr_idx = int(round(float(entry.pass_rate) * num_buckets))
+            curr_idx = max(0, min(num_buckets, curr_idx))
+            transition_counts[(prev_idx, curr_idx)] += 1
+            scatter_rows.append([float(prior_rate), float(entry.pass_rate), delta, int(entry.reuse_count or 0)])
+
+        if deltas:
+            metrics["prompt_reuse/pass_rate_delta_mean"] = float(np.mean(deltas))
+            metrics["prompt_reuse/pass_rate_delta_hist"] = deltas
+
+        if enable_wandb_plots:
+            if scatter_rows:
+                scatter_table = wandb.Table(
+                    columns=["prev_pass_rate", "current_pass_rate", "delta", "reuse_count"], data=scatter_rows
+                )
+                metrics["prompt_reuse/pass_rate_delta_table"] = scatter_table
+                scatter_plot = getattr(wandb.plot, "scatter", None)
+                if scatter_plot is not None:
+                    metrics["prompt_reuse/pass_rate_delta_scatter"] = scatter_plot(
+                        scatter_table,
+                        "prev_pass_rate",
+                        "current_pass_rate",
+                        title="Reused prompt pass rate shift",
+                    )
+
+            if transition_counts:
+                transition_rows = []
+                for (prev_idx, curr_idx), count in sorted(transition_counts.items()):
+                    transition_rows.append(
+                        [f"{prev_idx / num_buckets:.3f}", f"{curr_idx / num_buckets:.3f}", int(count)]
+                    )
+                transition_table = wandb.Table(
+                    columns=["source_bucket", "target_bucket", "count"], data=transition_rows
+                )
+                metrics["prompt_reuse/pass_rate_transition_table"] = transition_table
+                sankey_plot = getattr(wandb.plot, "sankey", None)
+                if sankey_plot is not None:
+                    metrics["prompt_reuse/pass_rate_transition_sankey"] = sankey_plot(
+                        transition_table, "source_bucket", "target_bucket", "count"
+                    )
+                heatmap_plot = getattr(wandb.plot, "heatmap", None)
+                if heatmap_plot is not None:
+                    metrics["prompt_reuse/pass_rate_transition_heatmap"] = heatmap_plot(
+                        transition_table, "source_bucket", "target_bucket", "count"
+                    )
+
+    return metrics
 
 
 class PendingQueriesMap:
@@ -2574,20 +2687,20 @@ def accumulate_inference_batches(
 
         percent_solved = np.mean(scores).item() / args.max_possible_score
         metadata = replay_metadata or PromptReplayMetadata.empty()
+        prompt_pass_entry = None
         if training_step is not None:
-            prompt_pass_entries.append(
-                PromptPassEntry(
-                    prompt_id=f"{dataset_name}::{result.dataset_index}",
-                    dataset_name=dataset_name,
-                    dataset_index=result.dataset_index,
-                    epoch_number=result.epoch_number,
-                    training_step=training_step,
-                    pass_rate=percent_solved,
-                    was_reused=metadata.was_reused,
-                    reuse_count=metadata.reuse_count,
-                    cooldown_ready_step=metadata.cooldown_ready_step,
-                )
+            prompt_pass_entry = PromptPassEntry(
+                prompt_id=f"{dataset_name}::{result.dataset_index}",
+                dataset_name=dataset_name,
+                dataset_index=result.dataset_index,
+                epoch_number=result.epoch_number,
+                training_step=training_step,
+                pass_rate=percent_solved,
+                was_reused=metadata.was_reused,
+                reuse_count=metadata.reuse_count,
+                cooldown_ready_step=metadata.cooldown_ready_step,
             )
+            prompt_pass_entries.append(prompt_pass_entry)
         # Don't resample prompt that was solved at more than no_resample_positive_rate
         if no_resampling_pass_rate is not None and percent_solved >= no_resampling_pass_rate:
             iter_dataloader.exclude_index(result.dataset_index)
@@ -2610,6 +2723,8 @@ def accumulate_inference_batches(
                 filtered_prompt_solved += 1
             else:
                 filtered_prompt_nonzero += 1
+            if prompt_pass_entry is not None:
+                prompt_pass_entry.included_in_batch = False
             logging.debug(
                 f"[Data Preparation Thread] Filtered prompt with reward std 0, total filtered {total_filtered_prompts}"
             )
@@ -2855,6 +2970,21 @@ def data_preparation_thread(
             if isinstance(result, ShutdownSentinel):
                 logger.info("[Data Preparation Thread] Received shutdown sentinel, exiting")
                 return
+
+            prompt_pass_metrics: dict[str, Any] = {}
+            if prompt_pass_entries:
+                prior_pass_rates = (
+                    iter_dataloader.prompt_pass_rates
+                    if iter_dataloader is not None and hasattr(iter_dataloader, "prompt_pass_rates")
+                    else None
+                )
+                prompt_pass_metrics = _compute_prompt_pass_metrics(
+                    prompt_pass_entries,
+                    prior_pass_rates,
+                    args.num_samples_per_prompt_rollout,
+                    args.with_tracking and wandb.run is not None,
+                )
+
             if (args.enable_prompt_pass_curriculum or args.enable_prompt_replay) and prompt_pass_entries:
                 iter_dataloader.update_prompt_pass_entries(prompt_pass_entries)
 
@@ -3005,6 +3135,7 @@ def data_preparation_thread(
                 "time/getting_response": getting_response_time,
                 **reward_metrics,
                 **batch_metrics_prefixed,
+                **prompt_pass_metrics,
             }
 
             total_tokens = result.token_statistics.num_prompt_tokens + result.token_statistics.num_response_tokens
@@ -3177,10 +3308,16 @@ def setup_datasets(args: Args, tc: TokenizerConfig, tokenizer: PreTrainedTokeniz
             system_prompt_override = f.read().strip()
         logger.info(f"System prompt overriden to:\n#####\n{system_prompt_override}\n#####\n")
 
-    transform_fn_args = [
-        {"system_prompt_override": system_prompt_override},
-        {"max_prompt_token_length": args.max_prompt_token_length},
-    ]
+    # Build transform_fn_args dynamically based on the transform functions
+    transform_fn_args = []
+    for fn_name in args.dataset_transform_fn:
+        if fn_name == "rlvr_tokenize_v1":
+            transform_fn_args.append({"system_prompt_override": system_prompt_override})
+        elif fn_name == "rlvr_max_length_filter_v1":
+            transform_fn_args.append({"max_prompt_token_length": args.max_prompt_token_length})
+        else:
+            # Converter functions (auto_convert_benchmark_format, etc.) don't need special args
+            transform_fn_args.append({})
     train_dataset = get_cached_dataset_tulu(
         dataset_mixer_list=args.dataset_mixer_list,
         dataset_mixer_list_splits=args.dataset_mixer_list_splits,
